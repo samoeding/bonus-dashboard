@@ -1,10 +1,11 @@
 export interface BonusInputs {
-  currentCollections: number;    // cash already received this FY
-  currentAR: number;             // invoiced but not yet collected
-  currentWIP: number;            // worked but not invoiced ($ amount)
+  currentCollections: number;         // cash already received this FY
+  currentAR: number;                  // invoiced but not yet collected
+  currentWIP: number;                 // worked but not invoiced ($ amount)
   billRate: number;
   projectedUtilization: number;
-  wipRealizationRate: number;
+  currentWipRealizationRate: number;  // rate for existing WIP → collections
+  futureWipRealizationRate: number;   // rate for new projected WIP → collections
   baseSalary: number;
   performanceMultiple: number;
   weeksRemaining: number;
@@ -12,8 +13,8 @@ export interface BonusInputs {
 
 export interface BonusResults {
   projectedNewWIP: number;
-  totalWIPToRealize: number;
-  projectedCollectionsFromWIP: number;  // (currentWIP + projectedNewWIP) × realization rate
+  projectedCollectionsFromCurrentWIP: number;
+  projectedCollectionsFromFutureWIP: number;
   projectedCollectionsFromAR: number;   // currentAR converts at 100%
   totalProjectedCollections: number;
   totalPipeline: number;                // currentCollections + currentAR + currentWIP
@@ -37,26 +38,33 @@ export function calcWeeksRemaining(): number {
 export function calculateBonus(inputs: BonusInputs): BonusResults {
   const {
     currentCollections, currentAR, currentWIP,
-    billRate, projectedUtilization, wipRealizationRate,
+    billRate, projectedUtilization,
+    currentWipRealizationRate, futureWipRealizationRate,
     baseSalary, performanceMultiple, weeksRemaining,
   } = inputs;
 
-  const projectedNewWIP = billRate * (projectedUtilization / 100) * 40 * weeksRemaining;
-  const totalWIPToRealize = currentWIP + projectedNewWIP;
-  const projectedCollectionsFromWIP = totalWIPToRealize * (wipRealizationRate / 100);
-  const projectedCollectionsFromAR = currentAR; // converts at 100%
-  const totalProjectedCollections = currentCollections + projectedCollectionsFromAR + projectedCollectionsFromWIP;
+  const projectedNewWIP                  = billRate * (projectedUtilization / 100) * 40 * weeksRemaining;
+  const projectedCollectionsFromCurrentWIP = currentWIP * (currentWipRealizationRate / 100);
+  const projectedCollectionsFromFutureWIP  = projectedNewWIP * (futureWipRealizationRate / 100);
+  const projectedCollectionsFromAR         = currentAR; // 100%
+  const totalProjectedCollections          = currentCollections
+    + projectedCollectionsFromAR
+    + projectedCollectionsFromCurrentWIP
+    + projectedCollectionsFromFutureWIP;
   const totalPipeline = currentCollections + currentAR + currentWIP;
 
-  const bonus = Math.max(0, totalProjectedCollections * (performanceMultiple / 100) - baseSalary);
+  const bonus    = Math.max(0, totalProjectedCollections * (performanceMultiple / 100) - baseSalary);
   const bonusPct = baseSalary > 0 ? (bonus / baseSalary) * 100 : 0;
   const weeksCompleted = 52 - weeksRemaining;
-  const fiscalYearPct = Math.min(100, (weeksCompleted / 52) * 100);
+  const fiscalYearPct  = Math.min(100, (weeksCompleted / 52) * 100);
 
   return {
-    projectedNewWIP, totalWIPToRealize,
-    projectedCollectionsFromWIP, projectedCollectionsFromAR,
-    totalProjectedCollections, totalPipeline,
+    projectedNewWIP,
+    projectedCollectionsFromCurrentWIP,
+    projectedCollectionsFromFutureWIP,
+    projectedCollectionsFromAR,
+    totalProjectedCollections,
+    totalPipeline,
     bonus, bonusPct, weeksCompleted, fiscalYearPct,
   };
 }
@@ -71,10 +79,12 @@ export function calcBonusAt(
   baseSalary: number,
   perfMultiple: number,
   weeksRemaining: number,
-  wipRealizationRate: number,
+  currentWipRealizationRate: number,
+  futureWipRealizationRate: number,
 ): number {
-  const projNewWIP = billRate * (util / 100) * 40 * weeksRemaining;
-  const fromWIP = (currentWIP + projNewWIP) * (wipRealizationRate / 100);
-  const total = currentCollections + currentAR + fromWIP;
+  const projNewWIP  = billRate * (util / 100) * 40 * weeksRemaining;
+  const fromCurrent = currentWIP * (currentWipRealizationRate / 100);
+  const fromFuture  = projNewWIP * (futureWipRealizationRate / 100);
+  const total       = currentCollections + currentAR + fromCurrent + fromFuture;
   return Math.max(0, total * (perfMultiple / 100) - baseSalary);
 }

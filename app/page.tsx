@@ -61,7 +61,10 @@ interface ChartPoint {
 }
 
 function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
-  const { currentCollections, currentWIP, billRate, projectedUtilization, wipRealizationRate, weeksRemaining } = inputs;
+  const {
+    currentCollections, currentAR, currentWIP, billRate, projectedUtilization,
+    currentWipRealizationRate, futureWipRealizationRate, weeksRemaining,
+  } = inputs;
   const WEEKLY_NEW_WIP = billRate * (projectedUtilization / 100) * 40;
   const MS_PER_WEEK    = 7 * 24 * 60 * 60 * 1000;
 
@@ -94,13 +97,16 @@ function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
   const totalWeeks = totalMs / MS_PER_WEEK;
 
   return dates.map(({ date, label }) => {
-    const weeksFromNow     = Math.max(0, (date.getTime() - today.getTime()) / MS_PER_WEEK);
-    const t                = totalWeeks > 0 ? weeksFromNow / totalWeeks : 0;
+    const weeksFromNow      = Math.max(0, (date.getTime() - today.getTime()) / MS_PER_WEEK);
+    const t                 = totalWeeks > 0 ? weeksFromNow / totalWeeks : 0;
     const newWipAccumulated = WEEKLY_NEW_WIP * weeksFromNow;
 
-    const collections  = currentCollections
-      + (currentWIP * (wipRealizationRate / 100) + newWipAccumulated * (wipRealizationRate / 100)) * t;
-    const pipeline     = currentCollections + currentWIP + newWipAccumulated;
+    // Current WIP realizes at currentWipRealizationRate, future WIP at futureWipRealizationRate
+    const collections = currentCollections
+      + currentAR
+      + (currentWIP * (currentWipRealizationRate / 100)) * t
+      + (newWipAccumulated * (futureWipRealizationRate / 100)) * t;
+    const pipeline = currentCollections + currentAR + currentWIP + newWipAccumulated;
 
     return { label, collections, pipelineAbove: Math.max(0, pipeline - collections) };
   });
@@ -184,9 +190,10 @@ function defaultInputs(): BonusInputs {
     currentAR:            150_000,
     currentWIP:            75_000,
     billRate:               650,    // Manager
-    projectedUtilization:   80,
-    wipRealizationRate:     85,
-    baseSalary:           200_000,
+    projectedUtilization:        80,
+    currentWipRealizationRate:   85,
+    futureWipRealizationRate:    50,
+    baseSalary:                200_000,
     performanceMultiple:    50,
     weeksRemaining:       calcWeeksRemaining(),
   };
@@ -347,9 +354,6 @@ function FormulaBreakdown({
   inputs: BonusInputs;
   results: ReturnType<typeof calculateBonus>;
 }) {
-  const currentWIPRealized = inputs.currentWIP * (inputs.wipRealizationRate / 100);
-  const projectedWIPRealized = results.projectedNewWIP * (inputs.wipRealizationRate / 100);
-
   const rows: { label: string; note: string; value: string; bold: boolean; accent: string }[] = [
     {
       label: 'Current Collections',
@@ -358,21 +362,21 @@ function FormulaBreakdown({
       bold: false, accent: '',
     },
     {
-      label: '+ Current AR (converts at 100%)',
+      label: '+ Current AR (100%)',
       note: 'Invoiced but not yet collected',
       value: `+ ${fmtCurrency(inputs.currentAR)}`,
       bold: false, accent: '',
     },
     {
-      label: `+ Current WIP × realization rate`,
-      note: `${fmtCurrency(inputs.currentWIP)} × ${inputs.wipRealizationRate}%`,
-      value: `+ ${fmtCurrency(currentWIPRealized)}`,
+      label: '+ Current WIP × current realization rate',
+      note: `${fmtCurrency(inputs.currentWIP)} × ${inputs.currentWipRealizationRate}%`,
+      value: `+ ${fmtCurrency(results.projectedCollectionsFromCurrentWIP)}`,
       bold: false, accent: '',
     },
     {
-      label: '+ Projected WIP × realization rate',
-      note: `$${inputs.billRate}/hr × ${inputs.projectedUtilization}% × 40 hrs × ${Math.round(inputs.weeksRemaining)} wks × ${inputs.wipRealizationRate}%`,
-      value: `+ ${fmtCurrency(projectedWIPRealized)}`,
+      label: '+ Projected WIP × future realization rate',
+      note: `$${inputs.billRate}/hr × ${inputs.projectedUtilization}% × 40 hrs × ${Math.round(inputs.weeksRemaining)} wks × ${inputs.futureWipRealizationRate}%`,
+      value: `+ ${fmtCurrency(results.projectedCollectionsFromFutureWIP)}`,
       bold: false, accent: '',
     },
     {
@@ -427,7 +431,8 @@ function FormulaBreakdown({
 function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
   const {
     currentCollections, currentAR, currentWIP,
-    billRate, baseSalary, weeksRemaining, wipRealizationRate,
+    billRate, baseSalary, weeksRemaining,
+    currentWipRealizationRate, futureWipRealizationRate,
     performanceMultiple, projectedUtilization,
   } = inputs;
 
@@ -463,7 +468,8 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
               {SENSITIVITY_UTILS.map((util) => {
                 const bonus = calcBonusAt(
                   currentCollections, currentAR, currentWIP,
-                  billRate, util, baseSalary, perf, weeksRemaining, wipRealizationRate,
+                  billRate, util, baseSalary, perf, weeksRemaining,
+                  currentWipRealizationRate, futureWipRealizationRate,
                 );
                 const isHighlight = perf === closestPerf && util === closestUtil;
                 let bg = '', text = '';
@@ -585,7 +591,7 @@ export default function Dashboard() {
           <MetricCard
             title="Total Projected Collections"
             value={fmtShort(results.totalProjectedCollections)}
-            sub={`${fmtShort(inputs.currentCollections)} collected + ${fmtShort(results.projectedCollectionsFromAR + results.projectedCollectionsFromWIP)} projected`}
+            sub={`${fmtShort(inputs.currentCollections)} collected + ${fmtShort(results.projectedCollectionsFromAR + results.projectedCollectionsFromCurrentWIP + results.projectedCollectionsFromFutureWIP)} projected`}
             icon={DollarSign}
           />
           <MetricCard
@@ -696,12 +702,20 @@ export default function Dashboard() {
                   description="Assumes 40 hrs/week full-time equivalent"
                 />
                 <TextInput
-                  label="WIP Realization Rate"
-                  value={inputs.wipRealizationRate}
-                  onChange={update('wipRealizationRate')}
+                  label="Current WIP Realization Rate"
+                  value={inputs.currentWipRealizationRate}
+                  onChange={update('currentWipRealizationRate')}
                   suffix="%"
                   placeholder="85"
-                  description="Collections ÷ WIP"
+                  description="Existing WIP converting by Oct 31"
+                />
+                <TextInput
+                  label="Future WIP Realization Rate"
+                  value={inputs.futureWipRealizationRate}
+                  onChange={update('futureWipRealizationRate')}
+                  suffix="%"
+                  placeholder="50"
+                  description="New projected WIP converting by Oct 31"
                 />
                 <TextInput
                   label="Weeks Remaining"
