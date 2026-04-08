@@ -9,11 +9,11 @@ import {
 } from '@/components/ui/table';
 import {
   calculateBonus, calcWeeksRemaining, calcBonusAt,
-  type BonusInputs,
+  type BonusInputs, type BonusResults,
 } from '@/lib/calculations';
 import {
-  DollarSign, TrendingUp, Percent, Layers, Printer,
-  TrendingDown, ChevronDown,
+  DollarSign, TrendingUp, TrendingDown, Percent, Layers, Printer,
+  ChevronDown, ChevronUp, CheckCircle2,
 } from 'lucide-react';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -33,11 +33,16 @@ const LEVELS = [
 const OLD_STORAGE_KEY = 'bonusDashboardSettings';
 const STORAGE_KEY     = 'bonusDashboardSettingsV2';
 
-// Chart colors
+// Chart colors per spec
 const CHART_BLUE  = '#3266ad';
-const CHART_GREEN = '#4a9e2a';
+const CHART_GREEN = '#3B6D11';
 const CHART_AMBER = '#F59E0B';
-const CHART_TEAL  = '#22D3EE';
+
+// Stacked bar segment colors per spec F1/F2
+const BAR_COLLECTIONS = '#1d4ed8';
+const BAR_AR          = '#b45309';
+const BAR_WIP         = '#15803d';
+const BAR_PROJECTED   = '#0e7490';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
@@ -45,12 +50,15 @@ const fmtCurrency = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
 const fmtShort = (v: number) => {
+  if (!isFinite(v)) return '—';
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
-  if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
+  if (v >= 1_000)     return `$${(v / 1_000).toFixed(0)}K`;
   return fmtCurrency(v);
 };
 
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
+
+const fmtPace = (v: number) => `$${(v / 1000).toFixed(1)}k/wk`;
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
@@ -73,22 +81,17 @@ function useCountUp(target: number, duration = 350): number {
   const rafRef  = useRef<number | null>(null);
 
   useEffect(() => {
-    if (reduced) { setValue(target); prevRef.current = target; return; }
+    if (reduced || !isFinite(target)) { setValue(target); prevRef.current = target; return; }
     const from = prevRef.current;
     const to   = target;
     const startTime = performance.now();
-
     const tick = (now: number) => {
       const p = Math.min((now - startTime) / duration, 1);
       const e = 1 - Math.pow(1 - p, 3);
       setValue(from + (to - from) * e);
-      if (p < 1) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        prevRef.current = to;
-      }
+      if (p < 1) { rafRef.current = requestAnimationFrame(tick); }
+      else { prevRef.current = to; }
     };
-
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
@@ -107,68 +110,70 @@ interface ChartPoint {
 }
 
 /**
- * Build production trajectory chart data.
- * The final point (Oct 31) uses totalProjectedCollections from calculateBonus so
- * it is guaranteed to match the summary card — no inline recomputation.
+ * 30 evenly-spaced points from today (t=0) to Oct 31 (t=1).
+ * Last point is pinned to totalProjectedCollections from calculateBonus
+ * so chart tooltip and summary card are guaranteed to match.
  */
 function generateProductionChartData(
   inputs: BonusInputs,
   totalProjectedCollections: number,
 ): ChartPoint[] {
+  const N = 30;
   const {
     currentCollections, currentAR, currentWIP, billRate, projectedUtilization,
     currentWipRealizationRate, futureWipRealizationRate, performanceMultiple,
+    weeksRemaining, baseSalary,
   } = inputs;
 
-  const WEEKLY_NEW_WIP = billRate * (projectedUtilization / 100) * 40;
-  const MS_PER_WEEK    = 7 * 24 * 60 * 60 * 1000;
-  const today = new Date();
-  const fyEnd = new Date(today.getFullYear(), 9, 31, 23, 59, 59);
+  const WEEKLY_BILL = billRate * (projectedUtilization / 100) * 40;
+  const today  = new Date();
+  const fyEnd  = new Date(today.getFullYear(), 9, 31, 23, 59, 59);
   const totalMs = Math.max(0, fyEnd.getTime() - today.getTime());
 
-  if (totalMs === 0) return [{
-    label: 'Oct',
-    collections: totalProjectedCollections,
-    productionAbove: 0,
-    totalCompensation: totalProjectedCollections * (performanceMultiple / 100),
-  }];
+  const makePoint = (label: string, t: number, isLast: boolean): ChartPoint => {
+    const weeksFromNow = t * weeksRemaining;
+    const newWipGross  = WEEKLY_BILL * weeksFromNow;
+    const collections  = isLast
+      ? totalProjectedCollections
+      : currentCollections + currentAR
+          + (currentWIP * (currentWipRealizationRate / 100)) * t
+          + (newWipGross * (futureWipRealizationRate / 100)) * t;
+    const grossProd      = currentCollections + currentAR + currentWIP + newWipGross;
+    const totalCompensation = baseSalary + Math.max(0, collections * (performanceMultiple / 100) - baseSalary);
+    return { label, collections, productionAbove: Math.max(0, grossProd - collections), totalCompensation };
+  };
 
-  const dates: { date: Date; label: string; isLast: boolean }[] = [];
-  dates.push({ date: today, label: today.toLocaleString('en-US', { month: 'short' }), isLast: false });
-  const cursor = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  while (cursor <= fyEnd) {
-    const isOct = cursor.getMonth() === 9;
-    dates.push({ date: new Date(cursor), label: cursor.toLocaleString('en-US', { month: 'short' }), isLast: isOct });
-    if (isOct) break;
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-  // Ensure Oct 31 is the last point
-  if (dates[dates.length - 1].label !== 'Oct') {
-    dates.push({ date: fyEnd, label: 'Oct', isLast: true });
+  if (totalMs === 0 || weeksRemaining <= 0) {
+    return [makePoint('Oct 31', 1, true)];
   }
 
-  const totalWeeks = totalMs / MS_PER_WEEK;
+  const points: ChartPoint[] = [];
+  let prevMonth = -1;
 
-  return dates.map(({ date, label, isLast }) => {
+  for (let i = 0; i < N; i++) {
+    const t      = i / (N - 1);
+    const isLast = i === N - 1;
+    const date   = new Date(today.getTime() + t * totalMs);
+
+    let label = '';
     if (isLast) {
-      // Use the canonical calculation result so chart tip and summary card always agree
-      return {
-        label,
-        collections: totalProjectedCollections,
-        productionAbove: 0,
-        totalCompensation: totalProjectedCollections * (performanceMultiple / 100),
-      };
+      label = 'Oct 31';
+    } else {
+      const m = date.getMonth();
+      if (m !== prevMonth) { label = date.toLocaleString('en-US', { month: 'short' }); prevMonth = m; }
     }
-    const weeksFromNow      = Math.max(0, (date.getTime() - today.getTime()) / MS_PER_WEEK);
-    const t                 = totalWeeks > 0 ? weeksFromNow / totalWeeks : 0;
-    const newWipAccumulated = WEEKLY_NEW_WIP * weeksFromNow;
-    const collections = currentCollections + currentAR
-      + (currentWIP  * (currentWipRealizationRate / 100)) * t
-      + (newWipAccumulated * (futureWipRealizationRate  / 100)) * t;
-    const production = currentCollections + currentAR + currentWIP + newWipAccumulated;
-    const totalCompensation = collections * (performanceMultiple / 100);
-    return { label, collections, productionAbove: Math.max(0, production - collections), totalCompensation };
-  });
+
+    points.push(makePoint(label, t, isLast));
+  }
+
+  // Dev assertion: last point must match summary card
+  if (process.env.NODE_ENV === 'development') {
+    const last = points[points.length - 1];
+    const drift = Math.abs(last.collections - totalProjectedCollections);
+    if (drift > 0.01) console.warn('[chart] drift from summary card:', drift);
+  }
+
+  return points;
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -192,8 +197,8 @@ function defaultInputs(): BonusInputs {
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
-const card  = 'bg-[#0F1629] border border-white/[0.07] rounded-2xl';
-const inputCls = 'h-10 w-full rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 text-sm font-mono tabular-nums text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-150 cursor-text';
+const card       = 'bg-[#0F1629] border border-white/[0.07] rounded-2xl';
+const inputCls   = 'h-10 w-full rounded-xl border border-white/[0.10] bg-white/[0.04] px-2 text-sm font-mono tabular-nums text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-150 cursor-text';
 const sectionLabel = 'text-xs font-semibold text-blue-400/80 tracking-wide shrink-0';
 
 // ─── TextInput ────────────────────────────────────────────────────────────────
@@ -216,14 +221,14 @@ function TextInput({
 
   return (
     <div>
-      {/* Fixed-height label so all inputs sit on the same baseline */}
+      {/* Fixed-height, centered label so all inputs align to the same baseline */}
       <label
-        className="text-xs font-medium text-muted-foreground flex items-end pb-1"
+        className="text-xs font-medium text-muted-foreground flex items-end justify-center text-center pb-1"
         style={{ minHeight: '2.5rem' }}
       >
         {labelText}
       </label>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1">
         {prefix && <span className="text-xs text-muted-foreground font-mono shrink-0">{prefix}</span>}
         <input
           type="text" value={raw} placeholder={placeholder}
@@ -248,7 +253,7 @@ function LevelSelect({ level, onLevelChange }: {
   return (
     <div>
       <label
-        className="text-xs font-medium text-muted-foreground flex items-end pb-1"
+        className="text-xs font-medium text-muted-foreground flex items-end justify-center text-center pb-1"
         style={{ minHeight: '2.5rem' }}
       >
         Level
@@ -260,15 +265,15 @@ function LevelSelect({ level, onLevelChange }: {
             const l = LEVELS.find((x) => x.name === e.target.value);
             if (l) onLevelChange(l.name, l.rate);
           }}
-          className={`${inputCls} appearance-none pr-8 cursor-pointer`}
-          style={{ minWidth: '10rem' }}
+          className={`${inputCls} appearance-none pr-7 cursor-pointer overflow-hidden`}
+          style={{ minWidth: '180px', textOverflow: 'ellipsis' }}
         >
           {LEVELS.map((l) => <option key={l.name} value={l.name} className="bg-[#0F1629]">{l.name}</option>)}
         </select>
-        <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
       </div>
-      <p className="text-xs text-muted-foreground/70 mt-1">
-        Bill rate: <span className="font-mono font-semibold text-blue-400">${selected.rate}/hr</span>
+      <p className="text-[10px] text-muted-foreground/70 mt-1 text-center">
+        ${selected.rate}/hr
       </p>
     </div>
   );
@@ -281,7 +286,6 @@ function StackedBar({ segments }: {
 }) {
   const total = segments.reduce((s, seg) => s + seg.value, 0);
   if (total <= 0) return null;
-
   return (
     <div className="mt-3">
       <div className="flex h-4 rounded-lg overflow-hidden w-full">
@@ -290,11 +294,11 @@ function StackedBar({ segments }: {
           return (
             <div
               key={i}
-              style={{ width: `${pct}%`, background: seg.color }}
               className="flex items-center justify-center overflow-hidden shrink-0"
+              style={{ width: `${pct}%`, background: seg.color }}
               title={`${seg.label}: ${fmtShort(seg.value)} · ${pct.toFixed(0)}%`}
             >
-              {pct >= 18 && (
+              {pct >= 20 && (
                 <span className="text-[9px] font-mono font-semibold text-white/90 px-0.5 leading-none truncate">
                   {fmtShort(seg.value)}
                 </span>
@@ -310,11 +314,59 @@ function StackedBar({ segments }: {
             <div key={i} className="flex items-center gap-1">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: seg.color }} />
               <span className="text-[10px] text-muted-foreground">
-                {seg.label} <span className="font-mono">{pct.toFixed(0)}%</span>
+                {seg.label} <span className="font-mono">{fmtShort(seg.value)}</span>{' '}
+                <span className="opacity-60">{pct.toFixed(0)}%</span>
               </span>
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ─── PacingSection ────────────────────────────────────────────────────────────
+
+function PacingSection({ results }: { results: BonusResults }) {
+  const { weeksElapsed, actualWeeklyRunRate, requiredWeeklyRunRate } = results;
+
+  if (weeksElapsed <= 0) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground/60">
+        No pace data yet — check back after week 1
+      </p>
+    );
+  }
+
+  const isOnPace = actualWeeklyRunRate >= requiredWeeklyRunRate;
+  const gap      = actualWeeklyRunRate - requiredWeeklyRunRate;
+
+  return (
+    <div className="mt-3 space-y-1.5 pt-2.5 border-t border-white/[0.06]">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">Actual pace</span>
+        <span className="font-mono tabular-nums">{fmtPace(actualWeeklyRunRate)}</span>
+      </div>
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">Required pace</span>
+        <span className="font-mono tabular-nums">{fmtPace(requiredWeeklyRunRate)}</span>
+      </div>
+      <div className="flex items-center gap-1.5 pt-0.5">
+        {isOnPace ? (
+          <>
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-xs font-medium">
+              <TrendingUp className="h-3 w-3" /> On pace
+            </span>
+            <span className="text-[11px] text-emerald-400/70">+{fmtPace(gap)} ahead</span>
+          </>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-400 text-xs font-medium">
+              <TrendingDown className="h-3 w-3" /> Behind pace
+            </span>
+            <span className="text-[11px] text-amber-400/70">{fmtPace(Math.abs(gap))} gap</span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -325,19 +377,13 @@ function StackedBar({ segments }: {
 function MetricCard({
   title, rawValue, format, sub, icon: Icon, accentColor, animDelay = 0, isPositive, children,
 }: {
-  title: string;
-  rawValue: number;
-  format: (v: number) => string;
-  sub?: string;
-  icon: React.ComponentType<{ className?: string }>;
-  accentColor?: string;
-  animDelay?: number;
-  isPositive?: boolean;
+  title: string; rawValue: number; format: (v: number) => string;
+  sub?: string; icon: React.ComponentType<{ className?: string }>;
+  accentColor?: string; animDelay?: number; isPositive?: boolean;
   children?: React.ReactNode;
 }) {
   const counted   = useCountUp(rawValue);
   const formatted = format(counted);
-
   return (
     <div
       className={`${card} p-5 group hover:-translate-y-0.5 hover:border-white/[0.12] transition-all duration-150 animate-fade-up`}
@@ -349,10 +395,8 @@ function MetricCard({
           <Icon className="h-4 w-4 text-muted-foreground" />
         </div>
       </div>
-      <p
-        className="text-3xl font-bold tabular-nums tracking-tight leading-none"
-        style={{ color: accentColor ?? '#F1F5F9' }}
-      >
+      <p className="text-3xl font-bold tabular-nums tracking-tight leading-none"
+         style={{ color: accentColor ?? '#F1F5F9' }}>
         {formatted}
       </p>
       {sub && (
@@ -370,6 +414,43 @@ function MetricCard({
   );
 }
 
+// ─── BreakevenCallout ─────────────────────────────────────────────────────────
+
+function BreakevenCallout({ results, projectedUtilization }: {
+  results: BonusResults; projectedUtilization: number;
+}) {
+  const { breakevenUtil } = results;
+  const covered      = breakevenUtil <= 0;
+  const unachievable = !isFinite(breakevenUtil) || breakevenUtil > 200;
+  const aboveBreakeven = !covered && !unachievable && breakevenUtil <= projectedUtilization;
+
+  const borderColor = covered || aboveBreakeven ? 'border-emerald-500/30'
+    : unachievable ? 'border-red-500/30' : 'border-amber-500/30';
+
+  return (
+    <div className={`rounded-xl border ${borderColor} bg-white/[0.03] p-2.5 flex flex-col justify-between`}
+         style={{ minWidth: '100px' }}>
+      <div>
+        <p className="text-[10px] font-semibold text-muted-foreground leading-tight">
+          Breakeven utilization
+        </p>
+        <p className="text-[10px] text-muted-foreground/60 leading-tight mb-1.5">
+          Min util for any bonus
+        </p>
+      </div>
+      {covered ? (
+        <p className="text-xs font-semibold text-emerald-400 leading-tight">Already covered</p>
+      ) : unachievable ? (
+        <p className="text-xs font-semibold text-red-400 leading-tight">Not achievable</p>
+      ) : (
+        <p className={`text-xl font-bold font-mono tabular-nums leading-none ${aboveBreakeven ? 'text-emerald-400' : 'text-amber-400'}`}>
+          {breakevenUtil.toFixed(1)}%
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── SensitivityTable ─────────────────────────────────────────────────────────
 
 function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
@@ -380,53 +461,56 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
     performanceMultiple, projectedUtilization,
   } = inputs;
 
-  // 7 rows centered on current performanceMultiple, clamped 0–100
+  // Dynamic 7×7 grid centered on user's current inputs (H1)
   const perfRows = [-3, -2, -1, 0, 1, 2, 3].map((d) =>
     Math.min(100, Math.max(0, performanceMultiple + d))
   );
-  // 7 cols centered on current projectedUtilization, clamped 0–200
   const utilCols = [-15, -10, -5, 0, 5, 10, 15].map((d) =>
     Math.min(200, Math.max(0, projectedUtilization + d))
   );
-  // Index 3 is always the middle = user's current inputs
   const activePerf = perfRows[3];
   const activeUtil = utilCols[3];
 
+  // Widths for precise H3 alignment
+  // The Perf % row-header cell uses w-14 (3.5rem = 56px) in the table
+  const ROW_HEADER_W = '3.5rem';
+  // The x-axis label row height + table header row height ≈ 3.5rem total
+  const Y_AXIS_TOP_SPACER = '3.5rem';
+
   return (
     <div className="flex gap-0">
-      {/* Y-axis: label + downward extending line */}
+      {/* Y-axis: label + downward extending line; arrow starts at first data row (H3) */}
       <div className="flex flex-col items-center shrink-0 mr-2">
+        {/* Spacer aligns line start with first data row, not header row */}
+        <div style={{ height: Y_AXIS_TOP_SPACER, flexShrink: 0 }} />
         <span
           className="text-[11px] text-muted-foreground/60 tracking-wide whitespace-nowrap"
-          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', flexShrink: 0 }}
         >
           Performance multiple (%)
         </span>
-        <div className="flex-1 mt-1" style={{ borderLeft: '1px solid rgba(255,255,255,0.15)', minHeight: '1rem' }} />
+        <div className="flex-1 mt-1" style={{ borderLeft: '1px solid rgba(255,255,255,0.15)', minHeight: '0.5rem' }} />
         <span className="text-[10px] text-muted-foreground/40 mt-0.5">↓</span>
       </div>
 
       <div className="flex-1 overflow-x-auto">
-        {/* X-axis: left-aligned label with full-width extending arrow */}
+        {/* X-axis: arrow starts above first data column, not above row-header cell (H3) */}
         <div className="flex items-center mb-0.5 text-[11px] text-muted-foreground/60 tracking-wide">
+          {/* Spacer = width of Perf % column */}
+          <div style={{ width: ROW_HEADER_W, flexShrink: 0 }} />
           <span className="whitespace-nowrap">Projected utilization (%)</span>
-          <div
-            className="flex-1 mx-1.5"
-            style={{ borderTop: '1px solid rgba(255,255,255,0.15)', marginTop: '1px' }}
-          />
+          <div className="flex-1 mx-1.5" style={{ borderTop: '1px solid rgba(255,255,255,0.15)', marginTop: '1px' }} />
           <span>→</span>
         </div>
 
         <Table>
           <TableHeader>
             <TableRow className="border-white/[0.06] hover:bg-transparent">
-              {/* Empty top-left corner — no label */}
+              {/* Empty top-left corner (H2) */}
               <TableHead className="w-14" />
               {utilCols.map((u, ci) => (
-                <TableHead
-                  key={ci}
-                  className={`text-center text-xs ${u === activeUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}
-                >
+                <TableHead key={ci}
+                  className={`text-center text-xs ${u === activeUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}>
                   {u}%
                 </TableHead>
               ))}
@@ -435,7 +519,7 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
           <TableBody>
             {perfRows.map((perf, ri) => (
               <TableRow key={ri} className="border-white/[0.04] hover:bg-white/[0.02]">
-                <TableCell className={`text-center text-xs font-semibold py-2 ${perf === activePerf && ri === 3 ? 'text-blue-400' : 'text-muted-foreground'}`}>
+                <TableCell className={`text-center text-xs font-semibold py-2 ${ri === 3 ? 'text-blue-400' : 'text-muted-foreground'}`}>
                   {perf}%
                 </TableCell>
                 {utilCols.map((util, ci) => {
@@ -449,19 +533,13 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
                   const fromCur     = currentWIP * (currentWipRealizationRate / 100);
                   const fromFut     = projNewWIP * (futureWipRealizationRate / 100);
                   const total       = currentCollections + currentAR + fromCur + fromFut;
-                  const tooltip     = `Util ${util}% × Perf ${perf}%\nProjected new WIP: ${fmtShort(projNewWIP)}\nFrom current WIP: ${fmtShort(fromCur)}\nFrom future WIP: ${fmtShort(fromFut)}\nTotal projected: ${fmtShort(total)}\nBonus: ${fmtCurrency(bonus)}`;
-
-                  let cellBg   = '';
-                  let cellText = 'text-foreground/80';
+                  const tooltip     = `Util ${util}% × Perf ${perf}%\nNew WIP: ${fmtShort(projNewWIP)}\nFrom cur WIP: ${fmtShort(fromCur)}\nFrom fut WIP: ${fmtShort(fromFut)}\nTotal: ${fmtShort(total)}\nBonus: ${fmtCurrency(bonus)}`;
+                  let cellBg = '', cellText = 'text-foreground/80';
                   if (bonus <= 0) { cellBg = 'bg-red-950/40'; cellText = 'text-red-400'; }
                   else if (bonus > 0.5 * baseSalary) { cellBg = 'bg-emerald-950/40'; cellText = 'text-emerald-400'; }
-
                   return (
-                    <TableCell
-                      key={ci}
-                      title={tooltip}
-                      className={`text-center font-mono text-xs py-2 cursor-default transition-colors duration-100 hover:bg-white/[0.05] ${cellBg} ${cellText} ${isHighlight ? 'animate-pulse-ring font-bold rounded-sm' : ''}`}
-                    >
+                    <TableCell key={ci} title={tooltip}
+                      className={`text-center font-mono text-xs py-2 cursor-default transition-colors duration-100 hover:bg-white/[0.05] ${cellBg} ${cellText} ${isHighlight ? 'animate-pulse-ring font-bold rounded-sm' : ''}`}>
                       {fmtShort(bonus)}
                     </TableCell>
                   );
@@ -478,20 +556,18 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
 // ─── FormulaBreakdown ─────────────────────────────────────────────────────────
 
 function FormulaBreakdown({ inputs, results }: {
-  inputs: BonusInputs;
-  results: ReturnType<typeof calculateBonus>;
+  inputs: BonusInputs; results: BonusResults;
 }) {
   const rows = [
-    { label: 'Current collections',                   note: 'Cash received this fiscal year',                                                                          value: fmtCurrency(inputs.currentCollections),                         bold: false, accent: '' },
-    { label: '+ Current AR (100%)',                    note: 'Invoiced, not yet collected',                                                                             value: `+ ${fmtCurrency(inputs.currentAR)}`,                           bold: false, accent: '' },
-    { label: '+ Current WIP × current realization',   note: `${fmtCurrency(inputs.currentWIP)} × ${inputs.currentWipRealizationRate}%`,                               value: `+ ${fmtCurrency(results.projectedCollectionsFromCurrentWIP)}`, bold: false, accent: '' },
-    { label: '+ Projected WIP × future realization',  note: `$${inputs.billRate}/hr × ${inputs.projectedUtilization}% × 40 hrs × ${Math.round(inputs.weeksRemaining)} wks × ${inputs.futureWipRealizationRate}%`, value: `+ ${fmtCurrency(results.projectedCollectionsFromFutureWIP)}`,  bold: false, accent: '' },
-    { label: '= Total projected collections',         note: '',                                                                                                        value: fmtCurrency(results.totalProjectedCollections),                 bold: true,  accent: '' },
-    { label: '× Performance multiple',                note: `${inputs.performanceMultiple}%`,                                                                          value: `× ${inputs.performanceMultiple}%`,                             bold: false, accent: '' },
-    { label: '− Base salary',                         note: '',                                                                                                        value: `− ${fmtCurrency(inputs.baseSalary)}`,                          bold: false, accent: '' },
-    { label: '= Bonus',                               note: `${fmtPct(results.bonusPct)} of base salary`,                                                             value: fmtCurrency(results.bonus),                                     bold: true,  accent: results.bonus > 0 ? 'text-emerald-400' : 'text-red-400' },
+    { label: 'Current collections',                  note: 'Cash received this FY',                                                                                       value: fmtCurrency(inputs.currentCollections),                         bold: false, accent: '' },
+    { label: '+ Current AR (100%)',                   note: 'Invoiced, not yet collected',                                                                                  value: `+ ${fmtCurrency(inputs.currentAR)}`,                           bold: false, accent: '' },
+    { label: '+ Current WIP × current realization',  note: `${fmtCurrency(inputs.currentWIP)} × ${inputs.currentWipRealizationRate}%`,                                    value: `+ ${fmtCurrency(results.projectedCollectionsFromCurrentWIP)}`, bold: false, accent: '' },
+    { label: '+ Projected WIP × future realization', note: `$${inputs.billRate}/hr × ${inputs.projectedUtilization}% × 40 hrs × ${Math.round(inputs.weeksRemaining)} wks × ${inputs.futureWipRealizationRate}%`, value: `+ ${fmtCurrency(results.projectedCollectionsFromFutureWIP)}`,  bold: false, accent: '' },
+    { label: '= Total projected collections',        note: '',                                                                                                             value: fmtCurrency(results.totalProjectedCollections),                 bold: true,  accent: '' },
+    { label: '× Performance multiple',               note: `${inputs.performanceMultiple}%`,                                                                               value: `× ${inputs.performanceMultiple}%`,                             bold: false, accent: '' },
+    { label: '− Base salary',                        note: '',                                                                                                             value: `− ${fmtCurrency(inputs.baseSalary)}`,                          bold: false, accent: '' },
+    { label: '= Bonus',                              note: `${fmtPct(results.bonusPct)} of base salary`,                                                                  value: fmtCurrency(results.bonus),                                     bold: true,  accent: results.bonus > 0 ? 'text-emerald-400' : 'text-red-400' },
   ];
-
   return (
     <div className="overflow-x-auto rounded-xl border border-white/[0.07]">
       <table className="w-full text-sm">
@@ -524,38 +600,33 @@ function ProductionTooltip({ active, payload, label }: {
     <div className="bg-[#131D35] border border-white/[0.10] rounded-xl shadow-xl px-3 py-2.5 text-xs space-y-1">
       <p className="font-semibold text-foreground mb-1.5">{label}</p>
       <p style={{ color: '#60A5FA' }}>Collections: {fmtCurrency(collections)}</p>
-      <p style={{ color: '#86EFAC' }}>Production: {fmtCurrency(collections + productionAbove)}</p>
+      <p style={{ color: '#86EFAC' }}>Gross production: {fmtCurrency(collections + productionAbove)}</p>
       <p style={{ color: CHART_AMBER }}>Total compensation: {fmtCurrency(totalCompensation)}</p>
     </div>
   );
 }
 
 function ProductionChart({
-  inputs,
-  totalProjectedCollections,
+  inputs, totalProjectedCollections,
 }: {
-  inputs: BonusInputs;
-  totalProjectedCollections: number;
+  inputs: BonusInputs; totalProjectedCollections: number;
 }) {
   const data = generateProductionChartData(inputs, totalProjectedCollections);
   return (
     <div className={`${card} p-5 h-full flex flex-col`}>
       <div className="flex items-center justify-between mb-4 shrink-0">
         <h2 className="text-sm font-semibold text-foreground">Production trajectory</h2>
-        <div className="flex gap-4 text-xs text-muted-foreground">
+        <div className="flex flex-wrap gap-4 text-xs text-muted-foreground justify-end">
           <div className="flex items-center gap-1.5">
             <span className="inline-block w-3 h-0.5 rounded-full" style={{ background: CHART_BLUE }} />
             <span>Collections</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="inline-block w-3 h-0.5 rounded-full" style={{ background: CHART_GREEN }} />
-            <span>WIP above collections</span>
+            <span>Gross production</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span
-              className="inline-block w-3"
-              style={{ borderTop: `2px dashed ${CHART_AMBER}`, marginTop: '1px' }}
-            />
+            <span className="inline-block w-3" style={{ borderTop: `2px dashed ${CHART_AMBER}`, marginTop: '1px' }} />
             <span>Total compensation</span>
           </div>
         </div>
@@ -566,19 +637,19 @@ function ProductionChart({
             <defs>
               <linearGradient id="gradBlue" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%"   stopColor={CHART_BLUE}  stopOpacity={0.35} />
-                <stop offset="100%" stopColor={CHART_BLUE}  stopOpacity={0.05} />
+                <stop offset="100%" stopColor={CHART_BLUE}  stopOpacity={0.04} />
               </linearGradient>
               <linearGradient id="gradGreen" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%"   stopColor={CHART_GREEN} stopOpacity={0.30} />
-                <stop offset="100%" stopColor={CHART_GREEN} stopOpacity={0.04} />
+                <stop offset="100%" stopColor={CHART_GREEN} stopOpacity={0.03} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} interval={0} />
             <YAxis tickFormatter={fmtShort} tick={{ fontSize: 10, fill: '#64748B' }} width={76} axisLine={false} tickLine={false} />
             <Tooltip content={<ProductionTooltip />} />
-            <Area type="monotone" dataKey="collections"     stackId="p" stroke={CHART_BLUE}  strokeWidth={2} fill="url(#gradBlue)"  animationDuration={800} animationEasing="ease-out" />
-            <Area type="monotone" dataKey="productionAbove" stackId="p" stroke={CHART_GREEN} strokeWidth={2} fill="url(#gradGreen)" animationDuration={800} animationEasing="ease-out" />
+            <Area type="monotone" dataKey="collections"      stackId="p" stroke={CHART_BLUE}  strokeWidth={2} fill="url(#gradBlue)"  animationDuration={800} animationEasing="ease-out" />
+            <Area type="monotone" dataKey="productionAbove"  stackId="p" stroke={CHART_GREEN} strokeWidth={2} fill="url(#gradGreen)" animationDuration={800} animationEasing="ease-out" />
             <Area type="monotone" dataKey="totalCompensation" stroke={CHART_AMBER} strokeWidth={2} strokeDasharray="4 3" fill="none" fillOpacity={0} animationDuration={800} animationEasing="ease-out" />
           </AreaChart>
         </ResponsiveContainer>
@@ -587,23 +658,127 @@ function ProductionChart({
   );
 }
 
+// ─── ReverseCalculator ────────────────────────────────────────────────────────
+
+function ReverseCalculator({ inputs }: { inputs: BonusInputs }) {
+  const [open, setOpen] = useState(false);
+  const [targetRaw, setTargetRaw] = useState('');
+
+  const {
+    baseSalary, performanceMultiple, currentCollections, currentAR, currentWIP,
+    currentWipRealizationRate, billRate, weeksRemaining, futureWipRealizationRate,
+    projectedUtilization,
+  } = inputs;
+
+  const targetBonus = parseFloat(targetRaw.replace(/[^0-9.]/g, '')) || 0;
+  const targetCollections = performanceMultiple > 0
+    ? (baseSalary + targetBonus) / (performanceMultiple / 100) : Infinity;
+  const remaining = !isFinite(targetCollections) ? Infinity
+    : targetCollections - currentCollections - currentAR - (currentWIP * (currentWipRealizationRate / 100));
+  const futureWipDenom = billRate * 40 * weeksRemaining * (futureWipRealizationRate / 100);
+  const requiredUtil = !isFinite(remaining) ? Infinity
+    : remaining <= 0 ? 0
+    : futureWipDenom > 0 ? (remaining / futureWipDenom) * 100 : Infinity;
+  const requiredHrs = isFinite(requiredUtil) && requiredUtil <= 200 ? (requiredUtil / 100) * 40 : null;
+
+  const presets = [
+    { label: '50% of salary',  value: baseSalary * 0.5 },
+    { label: '100% of salary', value: baseSalary * 1.0 },
+    { label: '150% of salary', value: baseSalary * 1.5 },
+  ];
+
+  return (
+    <div className={`${card} no-print overflow-hidden`}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
+      >
+        <span className="text-sm font-semibold text-foreground">Reverse calculator</span>
+        {open
+          ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+          : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+
+      {open && (
+        <div className="px-5 pb-5 space-y-4">
+          {/* Target bonus input */}
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Target bonus ($)</label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground font-mono">$</span>
+              <input
+                type="text"
+                value={targetRaw}
+                onChange={(e) => setTargetRaw(e.target.value)}
+                placeholder="e.g. 150000"
+                className={`${inputCls} max-w-xs`}
+              />
+            </div>
+          </div>
+
+          {/* Quick presets */}
+          <div className="flex flex-wrap gap-2">
+            {presets.map((p) => (
+              <button
+                key={p.label}
+                onClick={() => setTargetRaw(p.value.toFixed(0))}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.10] text-muted-foreground hover:text-foreground transition-all cursor-pointer"
+              >
+                {p.label} ({fmtShort(p.value)})
+              </button>
+            ))}
+          </div>
+
+          {/* Computed outputs */}
+          {targetRaw.trim() !== '' && (
+            <div className={`rounded-xl border border-white/[0.10] bg-white/[0.02] p-4 space-y-2.5`}>
+              {requiredUtil <= 0 ? (
+                <p className="text-xs text-emerald-400">Already on track with current production</p>
+              ) : !isFinite(requiredUtil) || requiredUtil > 200 ? (
+                <p className="text-xs text-red-400">Not achievable this year — required utilization exceeds 200%</p>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground text-xs">Required projected utilization</span>
+                    <span className="font-mono font-semibold text-foreground">{requiredUtil.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground text-xs">Required weekly billing</span>
+                    <span className="font-mono font-semibold text-foreground">{requiredHrs?.toFixed(1)} hrs/wk</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground/70">
+                    {(requiredUtil - projectedUtilization) >= 0
+                      ? `+${(requiredUtil - projectedUtilization).toFixed(1)}% above your current projection`
+                      : `${(requiredUtil - projectedUtilization).toFixed(1)}% below your current projection`}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [inputs, setInputs] = useState<BonusInputs>(defaultInputs);
-  const [level,  setLevel]  = useState(DEFAULT_LEVEL);
-  const [mounted, setMounted] = useState(false);
+  const [inputs, setInputs]           = useState<BonusInputs>(defaultInputs);
+  const [level,  setLevel]            = useState(DEFAULT_LEVEL);
+  const [lastYearBonus, setLastYearBonus] = useState(0);
+  const [mounted, setMounted]         = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     try {
-      // Migrate from old key to new key transparently
       const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(OLD_STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as Partial<BonusInputs> & { level?: string };
-        const { level: savedLevel, ...savedInputs } = parsed;
+        const parsed = JSON.parse(raw) as Partial<BonusInputs> & { level?: string; lastYearBonus?: number };
+        const { level: savedLevel, lastYearBonus: savedLYB, ...savedInputs } = parsed;
         setInputs((prev) => ({ ...prev, ...savedInputs }));
         if (savedLevel) setLevel(savedLevel);
+        if (savedLYB)   setLastYearBonus(savedLYB);
         if (!localStorage.getItem(STORAGE_KEY)) localStorage.setItem(STORAGE_KEY, raw);
       }
     } catch {}
@@ -614,9 +789,9 @@ export default function Dashboard() {
     if (!mounted) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...inputs, level }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...inputs, level, lastYearBonus }));
     }, 500);
-  }, [inputs, level, mounted]);
+  }, [inputs, level, lastYearBonus, mounted]);
 
   const update = useCallback(
     (key: keyof BonusInputs) => (value: number) =>
@@ -642,19 +817,39 @@ export default function Dashboard() {
   const fiscalPct  = Math.min(100, (weeksCompleted / 52) * 100);
   const todayStr   = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-  // Stacked bar data — "Total production today"
+  // ── Stacked bar segments ──────────────────────────────────────────────────
   const productionSegments = [
-    { label: 'Collections', value: inputs.currentCollections, color: CHART_BLUE  },
-    { label: 'AR',          value: inputs.currentAR,          color: CHART_AMBER },
-    { label: 'WIP',         value: inputs.currentWIP,         color: CHART_GREEN },
+    { label: 'Collections', value: inputs.currentCollections, color: BAR_COLLECTIONS },
+    { label: 'AR',          value: inputs.currentAR,          color: BAR_AR          },
+    { label: 'WIP',         value: inputs.currentWIP,         color: BAR_WIP         },
+  ];
+  const receivedTotal  = inputs.currentCollections + inputs.currentAR;
+  const projectedExtra = Math.max(0, results.totalProjectedCollections - receivedTotal);
+  const collectionsSegments = [
+    { label: 'Received (collections + AR)', value: receivedTotal,    color: BAR_COLLECTIONS },
+    { label: 'Projected',                   value: projectedExtra,   color: BAR_PROJECTED   },
   ];
 
-  // Stacked bar data — "Total projected collections"
-  const projectedNew = Math.max(0, results.totalProjectedCollections - inputs.currentCollections);
-  const collectionsSegments = [
-    { label: 'Received',  value: inputs.currentCollections, color: CHART_BLUE },
-    { label: 'Projected', value: projectedNew,              color: CHART_TEAL  },
-  ];
+  // ── Last year bonus comparison (F4) ──────────────────────────────────────
+  const hasLastYear = lastYearBonus > 0;
+  let lastYearSub: React.ReactNode;
+  if (!hasLastYear) {
+    lastYearSub = <span className="text-muted-foreground/60">Enter last year's bonus to compare</span>;
+  } else {
+    const diff    = results.bonus - lastYearBonus;
+    const diffPct = (diff / lastYearBonus) * 100;
+    if (diff > 0) {
+      lastYearSub = <span className="text-emerald-400 flex items-center gap-1"><TrendingUp className="h-3 w-3 shrink-0" />vs last year: +{fmtShort(diff)} (+{diffPct.toFixed(0)}%)</span>;
+    } else if (diff < 0) {
+      lastYearSub = <span className="text-red-400 flex items-center gap-1"><TrendingDown className="h-3 w-3 shrink-0" />vs last year: {fmtShort(diff)} ({diffPct.toFixed(0)}%)</span>;
+    } else {
+      lastYearSub = <span className="text-muted-foreground">vs last year: no change</span>;
+    }
+  }
+
+  // ── Gap to 100% card ──────────────────────────────────────────────────────
+  const gap100 = results.collectionsGapTo100;
+  const util100 = results.utilNeededFor100;
 
   return (
     <div className="min-h-screen bg-background">
@@ -673,7 +868,7 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { setInputs(defaultInputs()); setLevel(DEFAULT_LEVEL); localStorage.removeItem(STORAGE_KEY); }}
+              onClick={() => { setInputs(defaultInputs()); setLevel(DEFAULT_LEVEL); setLastYearBonus(0); localStorage.removeItem(STORAGE_KEY); }}
               className="text-xs px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/[0.06] transition-all duration-150 cursor-pointer"
             >
               Reset
@@ -691,47 +886,91 @@ export default function Dashboard() {
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-5">
 
-        {/* ── Metric Cards ───────────────────────────────────────────────── */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {/* ── Metric Cards (5) ───────────────────────────────────────────── */}
+        <section className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+
+          {/* 1. Total production today */}
           <MetricCard
             title="Total production today"
             rawValue={results.totalPipeline}
             format={fmtShort}
-            sub="Collections + AR + WIP"
             icon={Layers}
             animDelay={0}
           >
             <StackedBar segments={productionSegments} />
           </MetricCard>
+
+          {/* 2. Total projected collections */}
           <MetricCard
             title="Total projected collections"
             rawValue={results.totalProjectedCollections}
             format={fmtShort}
-            sub={`${fmtShort(inputs.currentCollections)} received + ${fmtShort(projectedNew)} projected`}
             icon={DollarSign}
-            animDelay={80}
+            animDelay={60}
           >
             <StackedBar segments={collectionsSegments} />
+            <PacingSection results={results} />
           </MetricCard>
+
+          {/* 3. Projected bonus */}
           <MetricCard
             title="Projected bonus"
             rawValue={results.bonus}
             format={fmtShort}
-            sub={results.bonus > 0 ? 'Above threshold' : 'Below threshold'}
+            sub={`Total comp: ${fmtShort(inputs.baseSalary + results.bonus)}`}
             icon={TrendingUp}
             accentColor={results.bonus > 0 ? '#34D399' : '#F87171'}
             isPositive={results.bonus > 0}
-            animDelay={160}
+            animDelay={120}
           />
+
+          {/* 4. Bonus % of base salary */}
           <MetricCard
             title="Bonus % of base salary"
             rawValue={results.bonusPct}
             format={fmtPct}
-            sub={`Base: ${fmtShort(inputs.baseSalary)}`}
             icon={Percent}
             accentColor={results.bonusPct > 50 ? '#34D399' : '#F1F5F9'}
-            animDelay={240}
-          />
+            animDelay={180}
+          >
+            <p className="text-xs mt-2 flex items-center gap-1 flex-wrap">{lastYearSub}</p>
+          </MetricCard>
+
+          {/* 5. Gap to 100% bonus */}
+          <div
+            className={`${card} p-5 hover:-translate-y-0.5 hover:border-white/[0.12] transition-all duration-150 animate-fade-up`}
+            style={{ animationDelay: '240ms' }}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-xs font-medium text-muted-foreground">Gap to 100% bonus</p>
+              <div className="rounded-lg bg-white/[0.05] p-1.5">
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </div>
+            </div>
+            {gap100 <= 0 ? (
+              <>
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
+                  <p className="text-2xl font-bold text-emerald-400 leading-none">Target reached</p>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {((results.bonus / inputs.baseSalary) * 100).toFixed(0)}% of base salary projected
+                </p>
+              </>
+            ) : !isFinite(util100) || util100 > 200 ? (
+              <>
+                <p className="text-3xl font-bold tabular-nums tracking-tight leading-none">{fmtShort(gap100)}</p>
+                <p className="text-xs text-red-400 mt-2">Not achievable this year</p>
+              </>
+            ) : (
+              <>
+                <p className="text-3xl font-bold tabular-nums tracking-tight leading-none">{fmtShort(gap100)}</p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Requires {util100.toFixed(1)}% projected utilization
+                </p>
+              </>
+            )}
+          </div>
         </section>
 
         {/* ── Inputs (horizontal compact) ────────────────────────────────── */}
@@ -744,20 +983,17 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Weeks remaining — above the bar, right-aligned */}
+          {/* Weeks remaining above bar */}
           <div className="flex justify-end text-xs text-muted-foreground/60 mb-1">
             <span>{Math.round(inputs.weeksRemaining)} wks remaining</span>
           </div>
 
-          {/* FY progress bar with current date positioned at the fill point */}
+          {/* FY progress bar */}
           <div>
             <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-              <div
-                className="h-full rounded-full bg-blue-500 transition-all duration-500"
-                style={{ width: `${fiscalPct}%` }}
-              />
+              <div className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                   style={{ width: `${fiscalPct}%` }} />
             </div>
-            {/* Current date pinned at the progress fill point */}
             <div className="relative h-5 mt-0.5">
               <span
                 className="absolute text-[10px] text-blue-400/80 font-mono -translate-x-1/2 whitespace-nowrap"
@@ -766,101 +1002,56 @@ export default function Dashboard() {
                 {todayStr}
               </span>
             </div>
-            {/* Endpoints below */}
             <div className="flex justify-between text-xs text-muted-foreground/40">
-              <span>Nov 1</span>
-              <span>Oct 31</span>
+              <span>Nov 1</span><span>Oct 31</span>
             </div>
           </div>
 
-          {/* Three input groups side-by-side */}
-          <div className="grid grid-cols-3 items-start divide-x divide-white/[0.06] mt-5">
+          {/* Three input clusters — flex so Projections can be wider */}
+          <div className="flex items-start mt-5 gap-0">
 
             {/* Group 1: Current production */}
-            <div className="pr-5">
+            <div className="shrink-0 pr-5 border-r border-white/[0.06]">
               <p className={`${sectionLabel} mb-2`}>Current production</p>
-              <div className="grid grid-cols-3 gap-2 items-start">
-                <TextInput
-                  labelText="Collections"
-                  value={inputs.currentCollections}
-                  onChange={update('currentCollections')}
-                  prefix="$" suffix="K" scale={1000} placeholder="500"
-                />
-                <TextInput
-                  labelText="Accounts receivable"
-                  value={inputs.currentAR}
-                  onChange={update('currentAR')}
-                  prefix="$" suffix="K" scale={1000} placeholder="150"
-                />
-                <TextInput
-                  labelText="WIP"
-                  value={inputs.currentWIP}
-                  onChange={update('currentWIP')}
-                  prefix="$" suffix="K" scale={1000} placeholder="75"
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 90px)', gap: '8px', alignItems: 'start' }}>
+                <TextInput labelText="Collections" value={inputs.currentCollections} onChange={update('currentCollections')} prefix="$" suffix="K" scale={1000} placeholder="500" />
+                <TextInput labelText="Accounts receivable" value={inputs.currentAR} onChange={update('currentAR')} prefix="$" suffix="K" scale={1000} placeholder="150" />
+                <TextInput labelText="WIP" value={inputs.currentWIP} onChange={update('currentWIP')} prefix="$" suffix="K" scale={1000} placeholder="75" />
               </div>
             </div>
 
             {/* Group 2: Projections */}
-            <div className="px-5">
+            <div className="flex-1 px-5 border-r border-white/[0.06] min-w-0">
               <p className={`${sectionLabel} mb-2`}>Projections</p>
-              <div className="grid grid-cols-4 gap-2 items-start">
+              <div style={{ display: 'grid', gridTemplateColumns: '180px 75px 85px 85px auto', gap: '8px', alignItems: 'start' }}>
                 <LevelSelect level={level} onLevelChange={handleLevelChange} />
-                <TextInput
-                  labelText="Projected utilization"
-                  value={inputs.projectedUtilization}
-                  onChange={update('projectedUtilization')}
-                  suffix="%" placeholder="80"
-                />
-                <TextInput
-                  labelText="Current WIP realization"
-                  value={inputs.currentWipRealizationRate}
-                  onChange={update('currentWipRealizationRate')}
-                  suffix="%" placeholder="85"
-                />
-                <TextInput
-                  labelText="Future WIP realization"
-                  value={inputs.futureWipRealizationRate}
-                  onChange={update('futureWipRealizationRate')}
-                  suffix="%" placeholder="50"
-                />
+                <TextInput labelText="Projected utilization" value={inputs.projectedUtilization} onChange={update('projectedUtilization')} suffix="%" placeholder="80" />
+                <TextInput labelText="Current WIP realization" value={inputs.currentWipRealizationRate} onChange={update('currentWipRealizationRate')} suffix="%" placeholder="85" />
+                <TextInput labelText="Future WIP realization" value={inputs.futureWipRealizationRate} onChange={update('futureWipRealizationRate')} suffix="%" placeholder="50" />
+                <BreakevenCallout results={results} projectedUtilization={inputs.projectedUtilization} />
               </div>
             </div>
 
             {/* Group 3: Compensation */}
-            <div className="pl-5">
+            <div className="shrink-0 pl-5">
               <p className={`${sectionLabel} mb-2`}>Compensation</p>
-              <div className="grid grid-cols-3 gap-2 items-start">
-                <TextInput
-                  labelText="Base salary"
-                  value={inputs.baseSalary}
-                  onChange={update('baseSalary')}
-                  prefix="$" suffix="K" scale={1000} placeholder="200"
-                />
-                <TextInput
-                  labelText="Performance multiple"
-                  value={inputs.performanceMultiple}
-                  onChange={update('performanceMultiple')}
-                  suffix="%" placeholder="50"
-                />
-                <TextInput
-                  labelText="Weeks remaining"
-                  value={inputs.weeksRemaining}
-                  onChange={update('weeksRemaining')}
-                  suffix=" wks" decimals={0} placeholder="28"
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '100px 85px 90px 95px', gap: '8px', alignItems: 'start' }}>
+                <TextInput labelText="Base salary" value={inputs.baseSalary} onChange={update('baseSalary')} prefix="$" suffix="K" scale={1000} placeholder="200" />
+                <TextInput labelText="Performance multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
+                <TextInput labelText="Weeks remaining" value={inputs.weeksRemaining} onChange={update('weeksRemaining')} suffix=" wks" decimals={0} placeholder="28" />
+                <TextInput labelText="Last year's bonus" value={lastYearBonus} onChange={setLastYearBonus} prefix="$" suffix="K" scale={1000} placeholder="0" />
               </div>
             </div>
 
           </div>
         </div>
 
+        {/* ── Reverse calculator (collapsible) ───────────────────────────── */}
+        <ReverseCalculator inputs={inputs} />
+
         {/* ── Chart + Sensitivity side-by-side ───────────────────────────── */}
         <div className="grid grid-cols-2 gap-5 items-stretch" style={{ minHeight: '420px' }}>
-          <ProductionChart
-            inputs={inputs}
-            totalProjectedCollections={results.totalProjectedCollections}
-          />
+          <ProductionChart inputs={inputs} totalProjectedCollections={results.totalProjectedCollections} />
 
           <div className={`${card} p-5 no-print h-full`}>
             <div className="mb-4">

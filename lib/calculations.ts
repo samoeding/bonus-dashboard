@@ -15,13 +15,22 @@ export interface BonusResults {
   projectedNewWIP: number;
   projectedCollectionsFromCurrentWIP: number;
   projectedCollectionsFromFutureWIP: number;
-  projectedCollectionsFromAR: number;   // currentAR converts at 100%
+  projectedCollectionsFromAR: number;
   totalProjectedCollections: number;
-  totalPipeline: number;                // currentCollections + currentAR + currentWIP
+  totalPipeline: number;
   bonus: number;
   bonusPct: number;
   weeksCompleted: number;
   fiscalYearPct: number;
+  // Pacing
+  weeksElapsed: number;
+  actualWeeklyRunRate: number;
+  requiredWeeklyRunRate: number;
+  // Breakeven
+  breakevenUtil: number;
+  // Gap to 100% bonus
+  collectionsGapTo100: number;
+  utilNeededFor100: number;
 }
 
 /** Fiscal year runs Nov 1 → Oct 31. Returns weeks remaining from today to Oct 31. */
@@ -43,7 +52,7 @@ export function calculateBonus(inputs: BonusInputs): BonusResults {
     baseSalary, performanceMultiple, weeksRemaining,
   } = inputs;
 
-  const projectedNewWIP                  = billRate * (projectedUtilization / 100) * 40 * weeksRemaining;
+  const projectedNewWIP                    = billRate * (projectedUtilization / 100) * 40 * weeksRemaining;
   const projectedCollectionsFromCurrentWIP = currentWIP * (currentWipRealizationRate / 100);
   const projectedCollectionsFromFutureWIP  = projectedNewWIP * (futureWipRealizationRate / 100);
   const projectedCollectionsFromAR         = currentAR; // 100%
@@ -58,6 +67,41 @@ export function calculateBonus(inputs: BonusInputs): BonusResults {
   const weeksCompleted = 52 - weeksRemaining;
   const fiscalYearPct  = Math.min(100, (weeksCompleted / 52) * 100);
 
+  // ── Pacing ────────────────────────────────────────────────────────────────
+  const weeksElapsed = weeksCompleted;
+  const actualWeeklyRunRate = weeksElapsed > 0 ? currentCollections / weeksElapsed : 0;
+  const requiredWeeklyRunRate = weeksRemaining > 0
+    ? (totalProjectedCollections - currentCollections) / weeksRemaining : 0;
+
+  // ── Breakeven: minimum utilization for bonus > 0 ─────────────────────────
+  const breakevenCollections = performanceMultiple > 0
+    ? baseSalary / (performanceMultiple / 100) : Infinity;
+  const remainingNeededForBreakeven = isFinite(breakevenCollections)
+    ? breakevenCollections - currentCollections - currentAR - (currentWIP * (currentWipRealizationRate / 100))
+    : Infinity;
+  const futureWipDenom = billRate * 40 * weeksRemaining * (futureWipRealizationRate / 100);
+  const breakevenUtil = !isFinite(remainingNeededForBreakeven) ? Infinity
+    : remainingNeededForBreakeven <= 0 ? 0
+    : futureWipDenom > 0
+      ? (remainingNeededForBreakeven / futureWipDenom) * 100
+      : Infinity;
+
+  // ── Gap to 100% of base salary as bonus ───────────────────────────────────
+  // bonus = baseSalary ⟹ collections × perf% = 2 × baseSalary
+  const targetCollectionsFor100PctBonus = performanceMultiple > 0
+    ? (baseSalary + baseSalary) / (performanceMultiple / 100) : Infinity;
+  const collectionsGapTo100 = !isFinite(targetCollectionsFor100PctBonus)
+    ? Infinity
+    : Math.max(0, targetCollectionsFor100PctBonus - totalProjectedCollections);
+  const remainingNeededFor100 = !isFinite(targetCollectionsFor100PctBonus)
+    ? Infinity
+    : targetCollectionsFor100PctBonus - currentCollections - currentAR - (currentWIP * (currentWipRealizationRate / 100));
+  const utilNeededFor100 = !isFinite(remainingNeededFor100) ? Infinity
+    : remainingNeededFor100 <= 0 ? 0
+    : futureWipDenom > 0
+      ? (remainingNeededFor100 / futureWipDenom) * 100
+      : Infinity;
+
   return {
     projectedNewWIP,
     projectedCollectionsFromCurrentWIP,
@@ -66,6 +110,12 @@ export function calculateBonus(inputs: BonusInputs): BonusResults {
     totalProjectedCollections,
     totalPipeline,
     bonus, bonusPct, weeksCompleted, fiscalYearPct,
+    weeksElapsed,
+    actualWeeklyRunRate,
+    requiredWeeklyRunRate,
+    breakevenUtil,
+    collectionsGapTo100,
+    utilNeededFor100,
   };
 }
 
