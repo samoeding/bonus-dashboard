@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
@@ -43,6 +46,133 @@ const fmtShort = (v: number) => {
 };
 
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
+
+// ─── Pipeline Chart ───────────────────────────────────────────────────────────
+
+const CHART_BLUE       = '#3266ad';
+const CHART_BLUE_FILL  = 'rgba(50, 102, 173, 0.18)';
+const CHART_GREEN      = '#3B6D11';
+const CHART_GREEN_FILL = 'rgba(59, 109, 17, 0.15)';
+
+interface ChartPoint {
+  label: string;
+  collections: number;
+  pipelineAbove: number; // pipeline − collections (stacked on top)
+}
+
+function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
+  const { currentCollections, currentWIP, billRate, projectedUtilization, wipRealizationRate, weeksRemaining } = inputs;
+  const WEEKLY_NEW_WIP = billRate * (projectedUtilization / 100) * 40;
+  const MS_PER_WEEK    = 7 * 24 * 60 * 60 * 1000;
+
+  const today = new Date();
+  const yr    = today.getFullYear();
+  const fyEnd = new Date(yr, 9, 31); // Oct 31
+  const totalMs = Math.max(0, fyEnd.getTime() - today.getTime());
+
+  if (totalMs === 0) {
+    return [{ label: 'Oct', collections: currentCollections, pipelineAbove: currentWIP }];
+  }
+
+  // Build the date points: today, then 1st of each subsequent month, then Oct 31
+  const dates: { date: Date; label: string }[] = [];
+
+  dates.push({ date: today, label: today.toLocaleString('en-US', { month: 'short' }) });
+
+  const cursor = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  while (cursor < fyEnd) {
+    dates.push({ date: new Date(cursor), label: cursor.toLocaleString('en-US', { month: 'short' }) });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  // Always include Oct 31 unless the last point is already Oct
+  const last = dates[dates.length - 1];
+  if (last.label !== 'Oct') {
+    dates.push({ date: fyEnd, label: 'Oct' });
+  }
+
+  const totalWeeks = totalMs / MS_PER_WEEK;
+
+  return dates.map(({ date, label }) => {
+    const weeksFromNow     = Math.max(0, (date.getTime() - today.getTime()) / MS_PER_WEEK);
+    const t                = totalWeeks > 0 ? weeksFromNow / totalWeeks : 0;
+    const newWipAccumulated = WEEKLY_NEW_WIP * weeksFromNow;
+
+    const collections  = currentCollections
+      + (currentWIP * (wipRealizationRate / 100) + newWipAccumulated * (wipRealizationRate / 100)) * t;
+    const pipeline     = currentCollections + currentWIP + newWipAccumulated;
+
+    return { label, collections, pipelineAbove: Math.max(0, pipeline - collections) };
+  });
+}
+
+function PipelineTooltip({ active, payload, label }: {
+  active?: boolean;
+  payload?: Array<{ dataKey: string; value: number }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const collections   = payload.find((p) => p.dataKey === 'collections')?.value ?? 0;
+  const pipelineAbove = payload.find((p) => p.dataKey === 'pipelineAbove')?.value ?? 0;
+  return (
+    <div className="bg-white border border-border rounded shadow-sm px-3 py-2 text-xs space-y-1">
+      <p className="font-semibold text-foreground">{label}</p>
+      <p style={{ color: CHART_BLUE }}>Collections: {fmtCurrency(collections)}</p>
+      <p style={{ color: CHART_GREEN }}>Pipeline: {fmtCurrency(collections + pipelineAbove)}</p>
+    </div>
+  );
+}
+
+function PipelineChart({ inputs }: { inputs: BonusInputs }) {
+  const data = generatePipelineChartData(inputs);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Pipeline Trajectory</CardTitle>
+        {/* Custom legend */}
+        <div className="flex gap-5 text-xs text-muted-foreground pt-1">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: CHART_BLUE }} />
+            Collections
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: CHART_GREEN }} />
+            WIP pipeline above collections
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={300}>
+          <AreaChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={fmtShort} tick={{ fontSize: 10 }} width={76} />
+            <Tooltip content={<PipelineTooltip />} />
+            {/* Blue area: 0 → collections */}
+            <Area
+              type="monotone"
+              dataKey="collections"
+              stackId="pipeline"
+              stroke={CHART_BLUE}
+              strokeWidth={2}
+              fill={CHART_BLUE_FILL}
+            />
+            {/* Green area: collections → pipeline (stacked on top) */}
+            <Area
+              type="monotone"
+              dataKey="pipelineAbove"
+              stackId="pipeline"
+              stroke={CHART_GREEN}
+              strokeWidth={2}
+              fill={CHART_GREEN_FILL}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -613,6 +743,9 @@ export default function Dashboard() {
 
           </CardContent>
         </Card>
+
+        {/* ── Pipeline Chart ── */}
+        <PipelineChart inputs={inputs} />
 
         {/* ── Sensitivity Table ── */}
         <Card className="no-print">
