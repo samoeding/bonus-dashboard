@@ -11,7 +11,7 @@ import {
   calculateBonus, calcWeeksRemaining, calcBonusAt,
   type BonusInputs,
 } from '@/lib/calculations';
-import { DollarSign, TrendingUp, Percent, Calendar, Printer } from 'lucide-react';
+import { DollarSign, TrendingUp, Percent, Layers, Printer } from 'lucide-react';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,37 +50,30 @@ const DEFAULT_LEVEL = 'Manager';
 
 function defaultInputs(): BonusInputs {
   return {
-    ytdCollections:      500_000,
-    billRate:            650,       // Manager default
-    projectedUtilization: 80,
-    wipRealizationRate:  85,
-    baseSalary:          200_000,
-    performanceMultiple: 50,
-    weeksRemaining:      calcWeeksRemaining(),
+    currentCollections:   500_000,
+    currentAR:            150_000,
+    currentWIP:            75_000,
+    billRate:               650,    // Manager
+    projectedUtilization:   80,
+    wipRealizationRate:     85,
+    baseSalary:           200_000,
+    performanceMultiple:    50,
+    weeksRemaining:       calcWeeksRemaining(),
   };
 }
 
 // ─── TextInput ────────────────────────────────────────────────────────────────
 
-interface TextInputProps {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  prefix?: string;
-  suffix?: string;
-  decimals?: number;
-  placeholder?: string;
-  description?: string;
-}
-
 function TextInput({
   label, value, onChange, prefix, suffix, decimals = 0, placeholder, description,
-}: TextInputProps) {
+}: {
+  label: string; value: number; onChange: (v: number) => void;
+  prefix?: string; suffix?: string; decimals?: number;
+  placeholder?: string; description?: string;
+}) {
   const [raw, setRaw] = useState(value.toFixed(decimals));
 
-  useEffect(() => {
-    setRaw(value.toFixed(decimals));
-  }, [value, decimals]);
+  useEffect(() => { setRaw(value.toFixed(decimals)); }, [value, decimals]);
 
   const commit = () => {
     const parsed = parseFloat(raw.replace(/[^0-9.-]/g, ''));
@@ -113,7 +106,7 @@ function TextInput({
   );
 }
 
-// ─── SliderInput (util only) ──────────────────────────────────────────────────
+// ─── SliderInput ──────────────────────────────────────────────────────────────
 
 function SliderInput({
   label, value, onChange, min, max, step, suffix, description,
@@ -166,7 +159,7 @@ function LevelSelect({
   level: string;
   onLevelChange: (name: string, rate: number) => void;
 }) {
-  const selected = LEVELS.find((l) => l.name === level) ?? LEVELS[4]; // Manager fallback
+  const selected = LEVELS.find((l) => l.name === level) ?? LEVELS[4];
 
   return (
     <div className="space-y-1">
@@ -224,35 +217,38 @@ function FormulaBreakdown({
   inputs: BonusInputs;
   results: ReturnType<typeof calculateBonus>;
 }) {
-  const rows = [
+  const currentWIPRealized = inputs.currentWIP * (inputs.wipRealizationRate / 100);
+  const projectedWIPRealized = results.projectedNewWIP * (inputs.wipRealizationRate / 100);
+
+  const rows: { label: string; note: string; value: string; bold: boolean; accent: string }[] = [
     {
-      label: 'Projected WIP',
-      note: `$${inputs.billRate}/hr × ${inputs.projectedUtilization}% util × 40 hrs × ${inputs.weeksRemaining} wks`,
-      value: fmtCurrency(results.projectedWIP),
+      label: 'Current Collections',
+      note: 'Cash received this fiscal year',
+      value: fmtCurrency(inputs.currentCollections),
       bold: false, accent: '',
     },
     {
-      label: '× WIP Realization Rate',
-      note: `${inputs.wipRealizationRate}%`,
-      value: `× ${inputs.wipRealizationRate}%`,
+      label: '+ Current AR (converts at 100%)',
+      note: 'Invoiced but not yet collected',
+      value: `+ ${fmtCurrency(inputs.currentAR)}`,
       bold: false, accent: '',
     },
     {
-      label: '= Projected Collections',
+      label: `+ Current WIP × realization rate`,
+      note: `${fmtCurrency(inputs.currentWIP)} × ${inputs.wipRealizationRate}%`,
+      value: `+ ${fmtCurrency(currentWIPRealized)}`,
+      bold: false, accent: '',
+    },
+    {
+      label: '+ Projected WIP × realization rate',
+      note: `$${inputs.billRate}/hr × ${inputs.projectedUtilization}% × 40 hrs × ${Math.round(inputs.weeksRemaining)} wks × ${inputs.wipRealizationRate}%`,
+      value: `+ ${fmtCurrency(projectedWIPRealized)}`,
+      bold: false, accent: '',
+    },
+    {
+      label: '= Total Projected Collections',
       note: '',
-      value: fmtCurrency(results.projectedCollections),
-      bold: true, accent: '',
-    },
-    {
-      label: '+ YTD Collections',
-      note: 'Collected this fiscal year',
-      value: `+ ${fmtCurrency(inputs.ytdCollections)}`,
-      bold: false, accent: '',
-    },
-    {
-      label: '= Total Collections',
-      note: '',
-      value: fmtCurrency(results.totalCollections),
+      value: fmtCurrency(results.totalProjectedCollections),
       bold: true, accent: '',
     },
     {
@@ -299,7 +295,11 @@ function FormulaBreakdown({
 // ─── SensitivityTable ─────────────────────────────────────────────────────────
 
 function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
-  const { ytdCollections, billRate, baseSalary, weeksRemaining, wipRealizationRate, performanceMultiple, projectedUtilization } = inputs;
+  const {
+    currentCollections, currentAR, currentWIP,
+    billRate, baseSalary, weeksRemaining, wipRealizationRate,
+    performanceMultiple, projectedUtilization,
+  } = inputs;
 
   const closestPerf = SENSITIVITY_PERFS.reduce((p, c) =>
     Math.abs(c - performanceMultiple) < Math.abs(p - performanceMultiple) ? c : p
@@ -331,7 +331,10 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
                 {perf}%
               </TableCell>
               {SENSITIVITY_UTILS.map((util) => {
-                const bonus = calcBonusAt(ytdCollections, billRate, util, baseSalary, perf, weeksRemaining, wipRealizationRate);
+                const bonus = calcBonusAt(
+                  currentCollections, currentAR, currentWIP,
+                  billRate, util, baseSalary, perf, weeksRemaining, wipRealizationRate,
+                );
                 const isHighlight = perf === closestPerf && util === closestUtil;
                 let bg = '', text = '';
                 if (bonus <= 0) { bg = 'bg-red-50'; text = 'text-red-600'; }
@@ -394,8 +397,7 @@ export default function Dashboard() {
   }, []);
 
   const handleReset = () => {
-    const fresh = defaultInputs();
-    setInputs(fresh);
+    setInputs(defaultInputs());
     setLevel(DEFAULT_LEVEL);
     localStorage.removeItem(STORAGE_KEY);
   };
@@ -445,9 +447,15 @@ export default function Dashboard() {
         {/* ── Metric Cards ── */}
         <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <MetricCard
-            title="Projected Total Collections"
-            value={fmtShort(results.totalCollections)}
-            sub={`${fmtShort(inputs.ytdCollections)} YTD + ${fmtShort(results.projectedCollections)} projected`}
+            title="Total Pipeline Today"
+            value={fmtShort(results.totalPipeline)}
+            sub={`Collections + AR + WIP in flight`}
+            icon={Layers}
+          />
+          <MetricCard
+            title="Total Projected Collections"
+            value={fmtShort(results.totalProjectedCollections)}
+            sub={`${fmtShort(inputs.currentCollections)} collected + ${fmtShort(results.projectedCollectionsFromAR + results.projectedCollectionsFromWIP)} projected`}
             icon={DollarSign}
           />
           <MetricCard
@@ -464,18 +472,13 @@ export default function Dashboard() {
             icon={Percent}
             accent={results.bonusPct > 50 ? 'text-green-600' : undefined}
           />
-          <MetricCard
-            title="Weeks Remaining in FY"
-            value={Math.round(inputs.weeksRemaining).toString()}
-            sub={`${Math.round(weeksCompleted)} wks completed of 52`}
-            icon={Calendar}
-          />
         </section>
 
         {/* ── Input Panel ── */}
         <Card className="no-print">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Inputs</CardTitle>
+            {/* FY progress bar */}
             <div className="space-y-1.5 pt-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>Fiscal Year Progress</span>
@@ -500,69 +503,106 @@ export default function Dashboard() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className="pt-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              {/* Level dropdown — full width */}
-              <div className="sm:col-span-2">
-                <LevelSelect level={level} onLevelChange={handleLevelChange} />
+          <CardContent className="pt-3 space-y-6">
+
+            {/* ── Current Pipeline ── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Current Pipeline</p>
+                <div className="flex-1 h-px bg-border" />
               </div>
-
-              <TextInput
-                label="YTD Collections"
-                value={inputs.ytdCollections}
-                onChange={update('ytdCollections')}
-                prefix="$"
-                placeholder="500000"
-                description="Amount already collected this fiscal year"
-              />
-
-              {/* Utilization keeps its slider */}
-              <SliderInput
-                label="Projected Utilization"
-                value={inputs.projectedUtilization}
-                onChange={update('projectedUtilization')}
-                min={0}
-                max={200}
-                step={1}
-                suffix="%"
-                description="Assumes 40 hrs/week full-time equivalent"
-              />
-
-              <TextInput
-                label="WIP Realization Rate"
-                value={inputs.wipRealizationRate}
-                onChange={update('wipRealizationRate')}
-                suffix="%"
-                placeholder="85"
-                description="Collections ÷ WIP"
-              />
-
-              <TextInput
-                label="Base Salary"
-                value={inputs.baseSalary}
-                onChange={update('baseSalary')}
-                prefix="$"
-                placeholder="200000"
-              />
-
-              <TextInput
-                label="Performance Multiple"
-                value={inputs.performanceMultiple}
-                onChange={update('performanceMultiple')}
-                suffix="%"
-                placeholder="50"
-              />
-
-              <TextInput
-                label="Weeks Remaining"
-                value={inputs.weeksRemaining}
-                onChange={update('weeksRemaining')}
-                suffix=" wks"
-                decimals={0}
-                placeholder="28"
-                description="Auto-calculated from today → Oct 31; override as needed"
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <TextInput
+                  label="Collections ($)"
+                  value={inputs.currentCollections}
+                  onChange={update('currentCollections')}
+                  prefix="$"
+                  placeholder="500000"
+                  description="Cash received this FY"
+                />
+                <TextInput
+                  label="Accounts Receivable ($)"
+                  value={inputs.currentAR}
+                  onChange={update('currentAR')}
+                  prefix="$"
+                  placeholder="150000"
+                  description="Invoiced, not yet collected"
+                />
+                <TextInput
+                  label="WIP ($)"
+                  value={inputs.currentWIP}
+                  onChange={update('currentWIP')}
+                  prefix="$"
+                  placeholder="75000"
+                  description="Worked, not yet invoiced"
+                />
+              </div>
             </div>
+
+            {/* ── Projections ── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Projections</p>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="sm:col-span-2">
+                  <LevelSelect level={level} onLevelChange={handleLevelChange} />
+                </div>
+                <SliderInput
+                  label="Projected Utilization"
+                  value={inputs.projectedUtilization}
+                  onChange={update('projectedUtilization')}
+                  min={0}
+                  max={200}
+                  step={1}
+                  suffix="%"
+                  description="Assumes 40 hrs/week full-time equivalent"
+                />
+                <TextInput
+                  label="WIP Realization Rate"
+                  value={inputs.wipRealizationRate}
+                  onChange={update('wipRealizationRate')}
+                  suffix="%"
+                  placeholder="85"
+                  description="Collections ÷ WIP"
+                />
+                <TextInput
+                  label="Weeks Remaining"
+                  value={inputs.weeksRemaining}
+                  onChange={update('weeksRemaining')}
+                  suffix=" wks"
+                  decimals={0}
+                  placeholder="28"
+                  description="Auto-calculated from today → Oct 31"
+                />
+              </div>
+            </div>
+
+            {/* ── Compensation ── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Compensation</p>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <TextInput
+                  label="Base Salary"
+                  value={inputs.baseSalary}
+                  onChange={update('baseSalary')}
+                  prefix="$"
+                  placeholder="200000"
+                />
+                <TextInput
+                  label="Performance Multiple"
+                  value={inputs.performanceMultiple}
+                  onChange={update('performanceMultiple')}
+                  suffix="%"
+                  placeholder="50"
+                />
+              </div>
+            </div>
+
           </CardContent>
         </Card>
 
