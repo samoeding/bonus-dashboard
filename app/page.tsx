@@ -65,23 +65,23 @@ function defaultInputs(): BonusInputs {
 // ─── TextInput ────────────────────────────────────────────────────────────────
 
 function TextInput({
-  label, value, onChange, prefix, suffix, decimals = 0, placeholder, description,
+  label, value, onChange, prefix, suffix, decimals = 0, placeholder, description, scale = 1,
 }: {
   label: string; value: number; onChange: (v: number) => void;
   prefix?: string; suffix?: string; decimals?: number;
-  placeholder?: string; description?: string;
+  placeholder?: string; description?: string; scale?: number;
 }) {
-  const [raw, setRaw] = useState(value.toFixed(decimals));
+  const [raw, setRaw] = useState((value / scale).toFixed(decimals));
 
-  useEffect(() => { setRaw(value.toFixed(decimals)); }, [value, decimals]);
+  useEffect(() => { setRaw((value / scale).toFixed(decimals)); }, [value, decimals, scale]);
 
   const commit = () => {
     const parsed = parseFloat(raw.replace(/[^0-9.-]/g, ''));
     if (!isNaN(parsed) && parsed >= 0) {
-      onChange(parsed);
+      onChange(parsed * scale);
       setRaw(parsed.toFixed(decimals));
     } else {
-      setRaw(value.toFixed(decimals));
+      setRaw((value / scale).toFixed(decimals));
     }
   };
 
@@ -513,27 +513,33 @@ export default function Dashboard() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <TextInput
-                  label="Collections ($)"
+                  label="Collections"
                   value={inputs.currentCollections}
                   onChange={update('currentCollections')}
                   prefix="$"
-                  placeholder="500000"
+                  suffix="K"
+                  scale={1000}
+                  placeholder="500"
                   description="Cash received this FY"
                 />
                 <TextInput
-                  label="Accounts Receivable ($)"
+                  label="Accounts Receivable"
                   value={inputs.currentAR}
                   onChange={update('currentAR')}
                   prefix="$"
-                  placeholder="150000"
+                  suffix="K"
+                  scale={1000}
+                  placeholder="150"
                   description="Invoiced, not yet collected"
                 />
                 <TextInput
-                  label="WIP ($)"
+                  label="WIP"
                   value={inputs.currentWIP}
                   onChange={update('currentWIP')}
                   prefix="$"
-                  placeholder="75000"
+                  suffix="K"
+                  scale={1000}
+                  placeholder="75"
                   description="Worked, not yet invoiced"
                 />
               </div>
@@ -591,7 +597,9 @@ export default function Dashboard() {
                   value={inputs.baseSalary}
                   onChange={update('baseSalary')}
                   prefix="$"
-                  placeholder="200000"
+                  suffix="K"
+                  scale={1000}
+                  placeholder="200"
                 />
                 <TextInput
                   label="Performance Multiple"
