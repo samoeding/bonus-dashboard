@@ -40,6 +40,7 @@ const CHART_BLUE       = '#3266ad';
 const CHART_BLUE_FILL  = 'rgba(50, 102, 173, 0.22)';
 const CHART_GREEN      = '#4a9e2a';   // lightened slightly for dark bg visibility
 const CHART_GREEN_FILL = 'rgba(74, 158, 42, 0.18)';
+const CHART_AMBER      = '#F59E0B';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
@@ -105,12 +106,14 @@ interface ChartPoint {
   label: string;
   collections: number;
   pipelineAbove: number;
+  totalCompensation: number;
 }
 
 function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
   const {
     currentCollections, currentAR, currentWIP, billRate, projectedUtilization,
     currentWipRealizationRate, futureWipRealizationRate, weeksRemaining,
+    performanceMultiple,
   } = inputs;
   const WEEKLY_NEW_WIP = billRate * (projectedUtilization / 100) * 40;
   const MS_PER_WEEK    = 7 * 24 * 60 * 60 * 1000;
@@ -118,7 +121,7 @@ function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
   const fyEnd = new Date(today.getFullYear(), 9, 31);
   const totalMs = Math.max(0, fyEnd.getTime() - today.getTime());
 
-  if (totalMs === 0) return [{ label: 'Oct', collections: currentCollections, pipelineAbove: currentWIP }];
+  if (totalMs === 0) return [{ label: 'Oct', collections: currentCollections, pipelineAbove: currentWIP, totalCompensation: currentCollections * (performanceMultiple / 100) }];
 
   const dates: { date: Date; label: string }[] = [];
   dates.push({ date: today, label: today.toLocaleString('en-US', { month: 'short' }) });
@@ -138,7 +141,8 @@ function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
       + (currentWIP  * (currentWipRealizationRate / 100)) * t
       + (newWipAccumulated * (futureWipRealizationRate  / 100)) * t;
     const pipeline = currentCollections + currentAR + currentWIP + newWipAccumulated;
-    return { label, collections, pipelineAbove: Math.max(0, pipeline - collections) };
+    const totalCompensation = collections * (performanceMultiple / 100);
+    return { label, collections, pipelineAbove: Math.max(0, pipeline - collections), totalCompensation };
   });
 }
 
@@ -341,24 +345,33 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
   );
 
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow className="border-white/[0.06] hover:bg-transparent">
-            <TableHead className="text-center text-xs font-semibold text-muted-foreground w-14">Perf %</TableHead>
-            {SENSITIVITY_UTILS.map((u) => (
-              <TableHead key={u} className={`text-center text-xs ${u === closestUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}>
-                {u}%
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {SENSITIVITY_PERFS.map((perf) => (
-            <TableRow key={perf} className="border-white/[0.04] hover:bg-white/[0.02]">
-              <TableCell className={`text-center text-xs font-semibold py-2 ${perf === closestPerf ? 'text-blue-400' : 'text-muted-foreground'}`}>
-                {perf}%
-              </TableCell>
+    <div className="flex gap-2">
+      {/* Row axis label */}
+      <div className="flex items-center justify-center shrink-0" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+        <span className="text-[11px] text-muted-foreground/60 tracking-wide">Perf. multiple</span>
+      </div>
+      <div className="flex-1 overflow-x-auto">
+        {/* Column axis label */}
+        <div className="text-right text-[11px] text-muted-foreground/60 tracking-wide pr-2 mb-0.5">
+          Projected utilization →
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow className="border-white/[0.06] hover:bg-transparent">
+              <TableHead className="text-center text-xs font-semibold text-muted-foreground w-14">Perf %</TableHead>
+              {SENSITIVITY_UTILS.map((u) => (
+                <TableHead key={u} className={`text-center text-xs ${u === closestUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}>
+                  {u}%
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {SENSITIVITY_PERFS.map((perf) => (
+              <TableRow key={perf} className="border-white/[0.04] hover:bg-white/[0.02]">
+                <TableCell className={`text-center text-xs font-semibold py-2 ${perf === closestPerf ? 'text-blue-400' : 'text-muted-foreground'}`}>
+                  {perf}%
+                </TableCell>
               {SENSITIVITY_UTILS.map((util) => {
                 const bonus = calcBonusAt(
                   currentCollections, currentAR, currentWIP,
@@ -391,6 +404,7 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
           ))}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 }
@@ -437,13 +451,15 @@ function PipelineTooltip({ active, payload, label }: {
   label?: string;
 }) {
   if (!active || !payload?.length) return null;
-  const collections   = payload.find((p) => p.dataKey === 'collections')?.value ?? 0;
-  const pipelineAbove = payload.find((p) => p.dataKey === 'pipelineAbove')?.value ?? 0;
+  const collections      = payload.find((p) => p.dataKey === 'collections')?.value ?? 0;
+  const pipelineAbove    = payload.find((p) => p.dataKey === 'pipelineAbove')?.value ?? 0;
+  const totalCompensation = payload.find((p) => p.dataKey === 'totalCompensation')?.value ?? 0;
   return (
     <div className="bg-[#131D35] border border-white/[0.10] rounded-xl shadow-xl px-3 py-2.5 text-xs space-y-1">
       <p className="font-semibold text-foreground mb-1.5">{label}</p>
       <p style={{ color: '#60A5FA' }}>Collections: {fmtCurrency(collections)}</p>
       <p style={{ color: '#86EFAC' }}>Pipeline: {fmtCurrency(collections + pipelineAbove)}</p>
+      <p style={{ color: CHART_AMBER }}>Total compensation: {fmtCurrency(totalCompensation)}</p>
     </div>
   );
 }
@@ -451,8 +467,8 @@ function PipelineTooltip({ active, payload, label }: {
 function PipelineChart({ inputs }: { inputs: BonusInputs }) {
   const data = generatePipelineChartData(inputs);
   return (
-    <div className={`${card} p-5`}>
-      <div className="flex items-center justify-between mb-4">
+    <div className={`${card} p-5 h-full flex flex-col`}>
+      <div className="flex items-center justify-between mb-4 shrink-0">
         <h2 className="text-sm font-semibold text-foreground">Pipeline trajectory</h2>
         <div className="flex gap-4 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5">
@@ -463,28 +479,38 @@ function PipelineChart({ inputs }: { inputs: BonusInputs }) {
             <span className="inline-block w-3 h-0.5 rounded-full" style={{ background: CHART_GREEN }} />
             <span>WIP above collections</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <span
+              className="inline-block w-3"
+              style={{ borderTop: `2px dashed ${CHART_AMBER}`, marginTop: '1px' }}
+            />
+            <span>Total compensation</span>
+          </div>
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={300}>
-        <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="gradBlue" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor={CHART_BLUE}  stopOpacity={0.35} />
-              <stop offset="100%" stopColor={CHART_BLUE}  stopOpacity={0.05} />
-            </linearGradient>
-            <linearGradient id="gradGreen" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor={CHART_GREEN} stopOpacity={0.30} />
-              <stop offset="100%" stopColor={CHART_GREEN} stopOpacity={0.04} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-          <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} />
-          <YAxis tickFormatter={fmtShort} tick={{ fontSize: 10, fill: '#64748B' }} width={76} axisLine={false} tickLine={false} />
-          <Tooltip content={<PipelineTooltip />} />
-          <Area type="monotone" dataKey="collections" stackId="p" stroke={CHART_BLUE}  strokeWidth={2} fill="url(#gradBlue)"  animationDuration={800} animationEasing="ease-out" />
-          <Area type="monotone" dataKey="pipelineAbove" stackId="p" stroke={CHART_GREEN} strokeWidth={2} fill="url(#gradGreen)" animationDuration={800} animationEasing="ease-out" />
-        </AreaChart>
-      </ResponsiveContainer>
+      <div className="flex-1 min-h-0">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="gradBlue" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor={CHART_BLUE}  stopOpacity={0.35} />
+                <stop offset="100%" stopColor={CHART_BLUE}  stopOpacity={0.05} />
+              </linearGradient>
+              <linearGradient id="gradGreen" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor={CHART_GREEN} stopOpacity={0.30} />
+                <stop offset="100%" stopColor={CHART_GREEN} stopOpacity={0.04} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={fmtShort} tick={{ fontSize: 10, fill: '#64748B' }} width={76} axisLine={false} tickLine={false} />
+            <Tooltip content={<PipelineTooltip />} />
+            <Area type="monotone" dataKey="collections"   stackId="p" stroke={CHART_BLUE}  strokeWidth={2} fill="url(#gradBlue)"  animationDuration={800} animationEasing="ease-out" />
+            <Area type="monotone" dataKey="pipelineAbove" stackId="p" stroke={CHART_GREEN} strokeWidth={2} fill="url(#gradGreen)" animationDuration={800} animationEasing="ease-out" />
+            <Area type="monotone" dataKey="totalCompensation" stroke={CHART_AMBER} strokeWidth={2} strokeDasharray="4 3" fill="none" fillOpacity={0} animationDuration={800} animationEasing="ease-out" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
@@ -615,83 +641,74 @@ export default function Dashboard() {
           />
         </section>
 
-        {/* ── Pipeline Chart ─────────────────────────────────────────────── */}
-        <PipelineChart inputs={inputs} />
-
-        {/* ── Inputs + Sensitivity side-by-side ──────────────────────────── */}
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[400px_1fr]">
-
-          {/* Inputs panel */}
-          <div className={`${card} p-5 no-print space-y-5`}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-foreground">Inputs</h2>
-              {/* FY progress bar */}
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="text-blue-400 font-mono tabular-nums font-medium">{fiscalPct.toFixed(0)}%</span>
-                <span>of FY elapsed</span>
-              </div>
-            </div>
-
-            {/* FY progress bar */}
-            <div className="space-y-1">
-              <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-blue-500 transition-all duration-500"
-                  style={{ width: `${fiscalPct}%` }}
-                />
-              </div>
-              <div className="flex justify-between text-xs text-muted-foreground/60">
-                <span>Nov 1</span>
-                <span>{Math.round(inputs.weeksRemaining)} wks remaining</span>
-                <span>Oct 31</span>
-              </div>
-            </div>
-
-            {/* Current pipeline */}
-            <div>
-              <div className={sectionDivider}>
-                <p className={sectionLabel}>Current pipeline</p>
-                <div className={dividerLine} />
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <TextInput labelText="Collections" value={inputs.currentCollections} onChange={update('currentCollections')} prefix="$" suffix="K" scale={1000} placeholder="500" description="Cash received" />
-                <TextInput labelText="Accounts receivable" value={inputs.currentAR} onChange={update('currentAR')} prefix="$" suffix="K" scale={1000} placeholder="150" description="Invoiced, unpaid" />
-                <TextInput labelText="WIP" value={inputs.currentWIP} onChange={update('currentWIP')} prefix="$" suffix="K" scale={1000} placeholder="75" description="Worked, not invoiced" />
-              </div>
-            </div>
-
-            {/* Projections */}
-            <div>
-              <div className={sectionDivider}>
-                <p className={sectionLabel}>Projections</p>
-                <div className={dividerLine} />
-              </div>
-              <div className="space-y-4">
-                <LevelSelect level={level} onLevelChange={handleLevelChange} />
-                <SliderInput labelText="Projected utilization" value={inputs.projectedUtilization} onChange={update('projectedUtilization')} min={0} max={200} step={1} suffix="%" description="Assumes 40 hrs/week" />
-                <div className="grid grid-cols-2 gap-3">
-                  <TextInput labelText="Current WIP realization" value={inputs.currentWipRealizationRate} onChange={update('currentWipRealizationRate')} suffix="%" placeholder="85" description="Existing WIP → collections" />
-                  <TextInput labelText="Future WIP realization" value={inputs.futureWipRealizationRate} onChange={update('futureWipRealizationRate')} suffix="%" placeholder="50" description="New WIP → collections" />
-                </div>
-                <TextInput labelText="Weeks remaining" value={inputs.weeksRemaining} onChange={update('weeksRemaining')} suffix=" wks" decimals={0} placeholder="28" description="Auto-calculated from today → Oct 31" />
-              </div>
-            </div>
-
-            {/* Compensation */}
-            <div>
-              <div className={sectionDivider}>
-                <p className={sectionLabel}>Compensation</p>
-                <div className={dividerLine} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <TextInput labelText="Base salary" value={inputs.baseSalary} onChange={update('baseSalary')} prefix="$" suffix="K" scale={1000} placeholder="200" />
-                <TextInput labelText="Performance multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
-              </div>
+        {/* ── Inputs (horizontal compact) ────────────────────────────────── */}
+        <div className={`${card} p-5 no-print`}>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold text-foreground">Inputs</h2>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="text-blue-400 font-mono tabular-nums font-medium">{fiscalPct.toFixed(0)}%</span>
+              <span>of FY elapsed</span>
             </div>
           </div>
 
+          {/* FY progress bar */}
+          <div className="space-y-1 mb-4">
+            <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                style={{ width: `${fiscalPct}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground/60">
+              <span>Nov 1</span>
+              <span>{Math.round(inputs.weeksRemaining)} wks remaining</span>
+              <span>Oct 31</span>
+            </div>
+          </div>
+
+          {/* Three groups side-by-side */}
+          <div className="grid grid-cols-3 items-start divide-x divide-white/[0.06]">
+
+            {/* Group 1: Current pipeline */}
+            <div className="pr-5">
+              <p className={`${sectionLabel} mb-2`}>Current pipeline</p>
+              <div className="grid grid-cols-3 gap-2 items-start">
+                <TextInput labelText="Collections" value={inputs.currentCollections} onChange={update('currentCollections')} prefix="$" suffix="K" scale={1000} placeholder="500" />
+                <TextInput labelText="Accts. receivable" value={inputs.currentAR} onChange={update('currentAR')} prefix="$" suffix="K" scale={1000} placeholder="150" />
+                <TextInput labelText="WIP" value={inputs.currentWIP} onChange={update('currentWIP')} prefix="$" suffix="K" scale={1000} placeholder="75" />
+              </div>
+            </div>
+
+            {/* Group 2: Projections */}
+            <div className="px-5">
+              <p className={`${sectionLabel} mb-2`}>Projections</p>
+              <div className="grid grid-cols-4 gap-2 items-start">
+                <LevelSelect level={level} onLevelChange={handleLevelChange} />
+                <TextInput labelText="Utilization" value={inputs.projectedUtilization} onChange={update('projectedUtilization')} suffix="%" placeholder="80" />
+                <TextInput labelText="Cur. WIP real." value={inputs.currentWipRealizationRate} onChange={update('currentWipRealizationRate')} suffix="%" placeholder="85" />
+                <TextInput labelText="Fut. WIP real." value={inputs.futureWipRealizationRate} onChange={update('futureWipRealizationRate')} suffix="%" placeholder="50" />
+              </div>
+            </div>
+
+            {/* Group 3: Compensation */}
+            <div className="pl-5">
+              <p className={`${sectionLabel} mb-2`}>Compensation</p>
+              <div className="grid grid-cols-3 gap-2 items-start">
+                <TextInput labelText="Base salary" value={inputs.baseSalary} onChange={update('baseSalary')} prefix="$" suffix="K" scale={1000} placeholder="200" />
+                <TextInput labelText="Perf. multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
+                <TextInput labelText="Weeks rem." value={inputs.weeksRemaining} onChange={update('weeksRemaining')} suffix=" wks" decimals={0} placeholder="28" />
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* ── Chart + Sensitivity side-by-side ───────────────────────────── */}
+        <div className="grid grid-cols-2 gap-5 items-stretch" style={{ minHeight: '420px' }}>
+          <PipelineChart inputs={inputs} />
+
           {/* Sensitivity table */}
-          <div className={`${card} p-5 no-print`}>
+          <div className={`${card} p-5 no-print h-full`}>
             <div className="mb-4">
               <h2 className="text-sm font-semibold text-foreground mb-1">Sensitivity analysis</h2>
               <p className="text-xs text-muted-foreground">
