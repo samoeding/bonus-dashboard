@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { Slider } from '@/components/ui/slider';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -31,16 +30,14 @@ const LEVELS = [
   { name: 'Intern',           rate: 55   },
 ] as const;
 
-const SENSITIVITY_PERFS = [25, 50, 75, 100];
-const SENSITIVITY_UTILS = [50, 60, 70, 80, 90, 100, 120];
-const STORAGE_KEY = 'bonusDashboardSettings';
+const OLD_STORAGE_KEY = 'bonusDashboardSettings';
+const STORAGE_KEY     = 'bonusDashboardSettingsV2';
 
-// Chart colors — kept from original spec
-const CHART_BLUE       = '#3266ad';
-const CHART_BLUE_FILL  = 'rgba(50, 102, 173, 0.22)';
-const CHART_GREEN      = '#4a9e2a';   // lightened slightly for dark bg visibility
-const CHART_GREEN_FILL = 'rgba(74, 158, 42, 0.18)';
-const CHART_AMBER      = '#F59E0B';
+// Chart colors
+const CHART_BLUE  = '#3266ad';
+const CHART_GREEN = '#4a9e2a';
+const CHART_AMBER = '#F59E0B';
+const CHART_TEAL  = '#22D3EE';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
@@ -83,7 +80,7 @@ function useCountUp(target: number, duration = 350): number {
 
     const tick = (now: number) => {
       const p = Math.min((now - startTime) / duration, 1);
-      const e = 1 - Math.pow(1 - p, 3); // cubic ease-out
+      const e = 1 - Math.pow(1 - p, 3);
       setValue(from + (to - from) * e);
       if (p < 1) {
         rafRef.current = requestAnimationFrame(tick);
@@ -105,44 +102,72 @@ function useCountUp(target: number, duration = 350): number {
 interface ChartPoint {
   label: string;
   collections: number;
-  pipelineAbove: number;
+  productionAbove: number;
   totalCompensation: number;
 }
 
-function generatePipelineChartData(inputs: BonusInputs): ChartPoint[] {
+/**
+ * Build production trajectory chart data.
+ * The final point (Oct 31) uses totalProjectedCollections from calculateBonus so
+ * it is guaranteed to match the summary card — no inline recomputation.
+ */
+function generateProductionChartData(
+  inputs: BonusInputs,
+  totalProjectedCollections: number,
+): ChartPoint[] {
   const {
     currentCollections, currentAR, currentWIP, billRate, projectedUtilization,
-    currentWipRealizationRate, futureWipRealizationRate, weeksRemaining,
-    performanceMultiple,
+    currentWipRealizationRate, futureWipRealizationRate, performanceMultiple,
   } = inputs;
+
   const WEEKLY_NEW_WIP = billRate * (projectedUtilization / 100) * 40;
   const MS_PER_WEEK    = 7 * 24 * 60 * 60 * 1000;
   const today = new Date();
-  const fyEnd = new Date(today.getFullYear(), 9, 31);
+  const fyEnd = new Date(today.getFullYear(), 9, 31, 23, 59, 59);
   const totalMs = Math.max(0, fyEnd.getTime() - today.getTime());
 
-  if (totalMs === 0) return [{ label: 'Oct', collections: currentCollections, pipelineAbove: currentWIP, totalCompensation: currentCollections * (performanceMultiple / 100) }];
+  if (totalMs === 0) return [{
+    label: 'Oct',
+    collections: totalProjectedCollections,
+    productionAbove: 0,
+    totalCompensation: totalProjectedCollections * (performanceMultiple / 100),
+  }];
 
-  const dates: { date: Date; label: string }[] = [];
-  dates.push({ date: today, label: today.toLocaleString('en-US', { month: 'short' }) });
+  const dates: { date: Date; label: string; isLast: boolean }[] = [];
+  dates.push({ date: today, label: today.toLocaleString('en-US', { month: 'short' }), isLast: false });
   const cursor = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  while (cursor < fyEnd) {
-    dates.push({ date: new Date(cursor), label: cursor.toLocaleString('en-US', { month: 'short' }) });
+  while (cursor <= fyEnd) {
+    const isOct = cursor.getMonth() === 9;
+    dates.push({ date: new Date(cursor), label: cursor.toLocaleString('en-US', { month: 'short' }), isLast: isOct });
+    if (isOct) break;
     cursor.setMonth(cursor.getMonth() + 1);
   }
-  if (dates[dates.length - 1].label !== 'Oct') dates.push({ date: fyEnd, label: 'Oct' });
+  // Ensure Oct 31 is the last point
+  if (dates[dates.length - 1].label !== 'Oct') {
+    dates.push({ date: fyEnd, label: 'Oct', isLast: true });
+  }
 
   const totalWeeks = totalMs / MS_PER_WEEK;
-  return dates.map(({ date, label }) => {
+
+  return dates.map(({ date, label, isLast }) => {
+    if (isLast) {
+      // Use the canonical calculation result so chart tip and summary card always agree
+      return {
+        label,
+        collections: totalProjectedCollections,
+        productionAbove: 0,
+        totalCompensation: totalProjectedCollections * (performanceMultiple / 100),
+      };
+    }
     const weeksFromNow      = Math.max(0, (date.getTime() - today.getTime()) / MS_PER_WEEK);
     const t                 = totalWeeks > 0 ? weeksFromNow / totalWeeks : 0;
     const newWipAccumulated = WEEKLY_NEW_WIP * weeksFromNow;
     const collections = currentCollections + currentAR
       + (currentWIP  * (currentWipRealizationRate / 100)) * t
       + (newWipAccumulated * (futureWipRealizationRate  / 100)) * t;
-    const pipeline = currentCollections + currentAR + currentWIP + newWipAccumulated;
+    const production = currentCollections + currentAR + currentWIP + newWipAccumulated;
     const totalCompensation = collections * (performanceMultiple / 100);
-    return { label, collections, pipelineAbove: Math.max(0, pipeline - collections), totalCompensation };
+    return { label, collections, productionAbove: Math.max(0, production - collections), totalCompensation };
   });
 }
 
@@ -168,20 +193,17 @@ function defaultInputs(): BonusInputs {
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
 const card  = 'bg-[#0F1629] border border-white/[0.07] rounded-2xl';
-const input = 'h-10 w-full rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 text-sm font-mono tabular-nums text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-150 cursor-text';
-const label = 'block text-xs font-medium text-muted-foreground mb-1';
-const sectionDivider = 'flex items-center gap-3 mb-4';
+const inputCls = 'h-10 w-full rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 text-sm font-mono tabular-nums text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-150 cursor-text';
 const sectionLabel = 'text-xs font-semibold text-blue-400/80 tracking-wide shrink-0';
-const dividerLine = 'flex-1 h-px bg-white/[0.06]';
 
 // ─── TextInput ────────────────────────────────────────────────────────────────
 
 function TextInput({
-  labelText, value, onChange, prefix, suffix, decimals = 0, placeholder, description, scale = 1,
+  labelText, value, onChange, prefix, suffix, decimals = 0, placeholder, scale = 1,
 }: {
   labelText: string; value: number; onChange: (v: number) => void;
   prefix?: string; suffix?: string; decimals?: number;
-  placeholder?: string; description?: string; scale?: number;
+  placeholder?: string; scale?: number;
 }) {
   const [raw, setRaw] = useState((value / scale).toFixed(decimals));
   useEffect(() => { setRaw((value / scale).toFixed(decimals)); }, [value, decimals, scale]);
@@ -193,8 +215,14 @@ function TextInput({
   };
 
   return (
-    <div className="space-y-1">
-      <label className={label}>{labelText}</label>
+    <div>
+      {/* Fixed-height label so all inputs sit on the same baseline */}
+      <label
+        className="text-xs font-medium text-muted-foreground flex items-end pb-1"
+        style={{ minHeight: '2.5rem' }}
+      >
+        {labelText}
+      </label>
       <div className="flex items-center gap-1.5">
         {prefix && <span className="text-xs text-muted-foreground font-mono shrink-0">{prefix}</span>}
         <input
@@ -202,49 +230,10 @@ function TextInput({
           onChange={(e) => setRaw(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          className={input}
+          className={inputCls}
         />
         {suffix && <span className="text-xs text-muted-foreground shrink-0">{suffix}</span>}
       </div>
-      {description && <p className="text-xs text-muted-foreground/70 mt-0.5">{description}</p>}
-    </div>
-  );
-}
-
-// ─── SliderInput ──────────────────────────────────────────────────────────────
-
-function SliderInput({
-  labelText, value, onChange, min, max, step, suffix, description,
-}: {
-  labelText: string; value: number; onChange: (v: number) => void;
-  min: number; max: number; step: number; suffix?: string; description?: string;
-}) {
-  const [raw, setRaw] = useState(String(value));
-  useEffect(() => { setRaw(String(value)); }, [value]);
-
-  const commit = () => {
-    const parsed = parseFloat(raw);
-    if (!isNaN(parsed)) { const c = Math.min(max, Math.max(min, parsed)); onChange(c); setRaw(String(c)); }
-    else setRaw(String(value));
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <label className={label}>{labelText}</label>
-        <div className="flex items-center gap-1">
-          <input
-            type="text" value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            className="w-14 h-7 text-right rounded-lg border border-white/[0.10] bg-white/[0.04] px-2 text-xs font-mono tabular-nums text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-150 cursor-text"
-          />
-          {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
-        </div>
-      </div>
-      <Slider min={min} max={max} step={step} value={[value]} onValueChange={([v]) => onChange(v)} className="cursor-pointer" />
-      {description && <p className="text-xs text-muted-foreground/70 mt-0.5">{description}</p>}
     </div>
   );
 }
@@ -257,8 +246,13 @@ function LevelSelect({ level, onLevelChange }: {
 }) {
   const selected = LEVELS.find((l) => l.name === level) ?? LEVELS[4];
   return (
-    <div className="space-y-1">
-      <label className={label}>Level</label>
+    <div>
+      <label
+        className="text-xs font-medium text-muted-foreground flex items-end pb-1"
+        style={{ minHeight: '2.5rem' }}
+      >
+        Level
+      </label>
       <div className="relative">
         <select
           value={level}
@@ -266,15 +260,62 @@ function LevelSelect({ level, onLevelChange }: {
             const l = LEVELS.find((x) => x.name === e.target.value);
             if (l) onLevelChange(l.name, l.rate);
           }}
-          className={`${input} appearance-none pr-8 cursor-pointer`}
+          className={`${inputCls} appearance-none pr-8 cursor-pointer`}
+          style={{ minWidth: '10rem' }}
         >
           {LEVELS.map((l) => <option key={l.name} value={l.name} className="bg-[#0F1629]">{l.name}</option>)}
         </select>
         <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
       </div>
-      <p className="text-xs text-muted-foreground/70">
+      <p className="text-xs text-muted-foreground/70 mt-1">
         Bill rate: <span className="font-mono font-semibold text-blue-400">${selected.rate}/hr</span>
       </p>
+    </div>
+  );
+}
+
+// ─── StackedBar ───────────────────────────────────────────────────────────────
+
+function StackedBar({ segments }: {
+  segments: { label: string; value: number; color: string }[];
+}) {
+  const total = segments.reduce((s, seg) => s + seg.value, 0);
+  if (total <= 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="flex h-4 rounded-lg overflow-hidden w-full">
+        {segments.map((seg, i) => {
+          const pct = (seg.value / total) * 100;
+          return (
+            <div
+              key={i}
+              style={{ width: `${pct}%`, background: seg.color }}
+              className="flex items-center justify-center overflow-hidden shrink-0"
+              title={`${seg.label}: ${fmtShort(seg.value)} · ${pct.toFixed(0)}%`}
+            >
+              {pct >= 18 && (
+                <span className="text-[9px] font-mono font-semibold text-white/90 px-0.5 leading-none truncate">
+                  {fmtShort(seg.value)}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-3 mt-1.5 flex-wrap">
+        {segments.map((seg, i) => {
+          const pct = (seg.value / total) * 100;
+          return (
+            <div key={i} className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: seg.color }} />
+              <span className="text-[10px] text-muted-foreground">
+                {seg.label} <span className="font-mono">{pct.toFixed(0)}%</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -282,7 +323,7 @@ function LevelSelect({ level, onLevelChange }: {
 // ─── MetricCard ───────────────────────────────────────────────────────────────
 
 function MetricCard({
-  title, rawValue, format, sub, icon: Icon, accentColor, animDelay = 0, isPositive,
+  title, rawValue, format, sub, icon: Icon, accentColor, animDelay = 0, isPositive, children,
 }: {
   title: string;
   rawValue: number;
@@ -292,6 +333,7 @@ function MetricCard({
   accentColor?: string;
   animDelay?: number;
   isPositive?: boolean;
+  children?: React.ReactNode;
 }) {
   const counted   = useCountUp(rawValue);
   const formatted = format(counted);
@@ -323,6 +365,7 @@ function MetricCard({
           {sub}
         </p>
       )}
+      {children}
     </div>
   );
 }
@@ -337,73 +380,96 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
     performanceMultiple, projectedUtilization,
   } = inputs;
 
-  const closestPerf = SENSITIVITY_PERFS.reduce((p, c) =>
-    Math.abs(c - performanceMultiple) < Math.abs(p - performanceMultiple) ? c : p
+  // 7 rows centered on current performanceMultiple, clamped 0–100
+  const perfRows = [-3, -2, -1, 0, 1, 2, 3].map((d) =>
+    Math.min(100, Math.max(0, performanceMultiple + d))
   );
-  const closestUtil = SENSITIVITY_UTILS.reduce((p, c) =>
-    Math.abs(c - projectedUtilization) < Math.abs(p - projectedUtilization) ? c : p
+  // 7 cols centered on current projectedUtilization, clamped 0–200
+  const utilCols = [-15, -10, -5, 0, 5, 10, 15].map((d) =>
+    Math.min(200, Math.max(0, projectedUtilization + d))
   );
+  // Index 3 is always the middle = user's current inputs
+  const activePerf = perfRows[3];
+  const activeUtil = utilCols[3];
 
   return (
-    <div className="flex gap-2">
-      {/* Row axis label */}
-      <div className="flex items-center justify-center shrink-0" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
-        <span className="text-[11px] text-muted-foreground/60 tracking-wide">Perf. multiple</span>
+    <div className="flex gap-0">
+      {/* Y-axis: label + downward extending line */}
+      <div className="flex flex-col items-center shrink-0 mr-2">
+        <span
+          className="text-[11px] text-muted-foreground/60 tracking-wide whitespace-nowrap"
+          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+        >
+          Performance multiple (%)
+        </span>
+        <div className="flex-1 mt-1" style={{ borderLeft: '1px solid rgba(255,255,255,0.15)', minHeight: '1rem' }} />
+        <span className="text-[10px] text-muted-foreground/40 mt-0.5">↓</span>
       </div>
+
       <div className="flex-1 overflow-x-auto">
-        {/* Column axis label */}
-        <div className="text-right text-[11px] text-muted-foreground/60 tracking-wide pr-2 mb-0.5">
-          Projected utilization →
+        {/* X-axis: left-aligned label with full-width extending arrow */}
+        <div className="flex items-center mb-0.5 text-[11px] text-muted-foreground/60 tracking-wide">
+          <span className="whitespace-nowrap">Projected utilization (%)</span>
+          <div
+            className="flex-1 mx-1.5"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.15)', marginTop: '1px' }}
+          />
+          <span>→</span>
         </div>
+
         <Table>
           <TableHeader>
             <TableRow className="border-white/[0.06] hover:bg-transparent">
-              <TableHead className="text-center text-xs font-semibold text-muted-foreground w-14">Perf %</TableHead>
-              {SENSITIVITY_UTILS.map((u) => (
-                <TableHead key={u} className={`text-center text-xs ${u === closestUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}>
+              {/* Empty top-left corner — no label */}
+              <TableHead className="w-14" />
+              {utilCols.map((u, ci) => (
+                <TableHead
+                  key={ci}
+                  className={`text-center text-xs ${u === activeUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}
+                >
                   {u}%
                 </TableHead>
               ))}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {SENSITIVITY_PERFS.map((perf) => (
-              <TableRow key={perf} className="border-white/[0.04] hover:bg-white/[0.02]">
-                <TableCell className={`text-center text-xs font-semibold py-2 ${perf === closestPerf ? 'text-blue-400' : 'text-muted-foreground'}`}>
+            {perfRows.map((perf, ri) => (
+              <TableRow key={ri} className="border-white/[0.04] hover:bg-white/[0.02]">
+                <TableCell className={`text-center text-xs font-semibold py-2 ${perf === activePerf && ri === 3 ? 'text-blue-400' : 'text-muted-foreground'}`}>
                   {perf}%
                 </TableCell>
-              {SENSITIVITY_UTILS.map((util) => {
-                const bonus = calcBonusAt(
-                  currentCollections, currentAR, currentWIP,
-                  billRate, util, baseSalary, perf, weeksRemaining,
-                  currentWipRealizationRate, futureWipRealizationRate,
-                );
-                const isHighlight = perf === closestPerf && util === closestUtil;
-                const projNewWIP  = billRate * (util / 100) * 40 * weeksRemaining;
-                const fromCur     = currentWIP * (currentWipRealizationRate / 100);
-                const fromFut     = projNewWIP * (futureWipRealizationRate / 100);
-                const total       = currentCollections + currentAR + fromCur + fromFut;
-                const tooltip     = `Util ${util}% × Perf ${perf}%\nProjected new WIP: ${fmtShort(projNewWIP)}\nFrom current WIP: ${fmtShort(fromCur)}\nFrom future WIP: ${fmtShort(fromFut)}\nTotal projected: ${fmtShort(total)}\nBonus: ${fmtCurrency(bonus)}`;
+                {utilCols.map((util, ci) => {
+                  const bonus = calcBonusAt(
+                    currentCollections, currentAR, currentWIP,
+                    billRate, util, baseSalary, perf, weeksRemaining,
+                    currentWipRealizationRate, futureWipRealizationRate,
+                  );
+                  const isHighlight = ri === 3 && ci === 3;
+                  const projNewWIP  = billRate * (util / 100) * 40 * weeksRemaining;
+                  const fromCur     = currentWIP * (currentWipRealizationRate / 100);
+                  const fromFut     = projNewWIP * (futureWipRealizationRate / 100);
+                  const total       = currentCollections + currentAR + fromCur + fromFut;
+                  const tooltip     = `Util ${util}% × Perf ${perf}%\nProjected new WIP: ${fmtShort(projNewWIP)}\nFrom current WIP: ${fmtShort(fromCur)}\nFrom future WIP: ${fmtShort(fromFut)}\nTotal projected: ${fmtShort(total)}\nBonus: ${fmtCurrency(bonus)}`;
 
-                let cellBg   = '';
-                let cellText = 'text-foreground/80';
-                if (bonus <= 0) { cellBg = 'bg-red-950/40';   cellText = 'text-red-400'; }
-                else if (bonus > 0.5 * baseSalary) { cellBg = 'bg-emerald-950/40'; cellText = 'text-emerald-400'; }
+                  let cellBg   = '';
+                  let cellText = 'text-foreground/80';
+                  if (bonus <= 0) { cellBg = 'bg-red-950/40'; cellText = 'text-red-400'; }
+                  else if (bonus > 0.5 * baseSalary) { cellBg = 'bg-emerald-950/40'; cellText = 'text-emerald-400'; }
 
-                return (
-                  <TableCell
-                    key={util}
-                    title={tooltip}
-                    className={`text-center font-mono text-xs py-2 cursor-default transition-colors duration-100 hover:bg-white/[0.05] ${cellBg} ${cellText} ${isHighlight ? 'animate-pulse-ring font-bold rounded-sm' : ''}`}
-                  >
-                    {fmtShort(bonus)}
-                  </TableCell>
-                );
-              })}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                  return (
+                    <TableCell
+                      key={ci}
+                      title={tooltip}
+                      className={`text-center font-mono text-xs py-2 cursor-default transition-colors duration-100 hover:bg-white/[0.05] ${cellBg} ${cellText} ${isHighlight ? 'animate-pulse-ring font-bold rounded-sm' : ''}`}
+                    >
+                      {fmtShort(bonus)}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
@@ -443,33 +509,39 @@ function FormulaBreakdown({ inputs, results }: {
   );
 }
 
-// ─── Pipeline Chart ───────────────────────────────────────────────────────────
+// ─── Production Chart ─────────────────────────────────────────────────────────
 
-function PipelineTooltip({ active, payload, label }: {
+function ProductionTooltip({ active, payload, label }: {
   active?: boolean;
   payload?: Array<{ dataKey: string; value: number }>;
   label?: string;
 }) {
   if (!active || !payload?.length) return null;
-  const collections      = payload.find((p) => p.dataKey === 'collections')?.value ?? 0;
-  const pipelineAbove    = payload.find((p) => p.dataKey === 'pipelineAbove')?.value ?? 0;
+  const collections       = payload.find((p) => p.dataKey === 'collections')?.value ?? 0;
+  const productionAbove   = payload.find((p) => p.dataKey === 'productionAbove')?.value ?? 0;
   const totalCompensation = payload.find((p) => p.dataKey === 'totalCompensation')?.value ?? 0;
   return (
     <div className="bg-[#131D35] border border-white/[0.10] rounded-xl shadow-xl px-3 py-2.5 text-xs space-y-1">
       <p className="font-semibold text-foreground mb-1.5">{label}</p>
       <p style={{ color: '#60A5FA' }}>Collections: {fmtCurrency(collections)}</p>
-      <p style={{ color: '#86EFAC' }}>Pipeline: {fmtCurrency(collections + pipelineAbove)}</p>
+      <p style={{ color: '#86EFAC' }}>Production: {fmtCurrency(collections + productionAbove)}</p>
       <p style={{ color: CHART_AMBER }}>Total compensation: {fmtCurrency(totalCompensation)}</p>
     </div>
   );
 }
 
-function PipelineChart({ inputs }: { inputs: BonusInputs }) {
-  const data = generatePipelineChartData(inputs);
+function ProductionChart({
+  inputs,
+  totalProjectedCollections,
+}: {
+  inputs: BonusInputs;
+  totalProjectedCollections: number;
+}) {
+  const data = generateProductionChartData(inputs, totalProjectedCollections);
   return (
     <div className={`${card} p-5 h-full flex flex-col`}>
       <div className="flex items-center justify-between mb-4 shrink-0">
-        <h2 className="text-sm font-semibold text-foreground">Pipeline trajectory</h2>
+        <h2 className="text-sm font-semibold text-foreground">Production trajectory</h2>
         <div className="flex gap-4 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5">
             <span className="inline-block w-3 h-0.5 rounded-full" style={{ background: CHART_BLUE }} />
@@ -504,9 +576,9 @@ function PipelineChart({ inputs }: { inputs: BonusInputs }) {
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} />
             <YAxis tickFormatter={fmtShort} tick={{ fontSize: 10, fill: '#64748B' }} width={76} axisLine={false} tickLine={false} />
-            <Tooltip content={<PipelineTooltip />} />
-            <Area type="monotone" dataKey="collections"   stackId="p" stroke={CHART_BLUE}  strokeWidth={2} fill="url(#gradBlue)"  animationDuration={800} animationEasing="ease-out" />
-            <Area type="monotone" dataKey="pipelineAbove" stackId="p" stroke={CHART_GREEN} strokeWidth={2} fill="url(#gradGreen)" animationDuration={800} animationEasing="ease-out" />
+            <Tooltip content={<ProductionTooltip />} />
+            <Area type="monotone" dataKey="collections"     stackId="p" stroke={CHART_BLUE}  strokeWidth={2} fill="url(#gradBlue)"  animationDuration={800} animationEasing="ease-out" />
+            <Area type="monotone" dataKey="productionAbove" stackId="p" stroke={CHART_GREEN} strokeWidth={2} fill="url(#gradGreen)" animationDuration={800} animationEasing="ease-out" />
             <Area type="monotone" dataKey="totalCompensation" stroke={CHART_AMBER} strokeWidth={2} strokeDasharray="4 3" fill="none" fillOpacity={0} animationDuration={800} animationEasing="ease-out" />
           </AreaChart>
         </ResponsiveContainer>
@@ -525,12 +597,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<BonusInputs> & { level?: string };
+      // Migrate from old key to new key transparently
+      const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(OLD_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<BonusInputs> & { level?: string };
         const { level: savedLevel, ...savedInputs } = parsed;
         setInputs((prev) => ({ ...prev, ...savedInputs }));
         if (savedLevel) setLevel(savedLevel);
+        if (!localStorage.getItem(STORAGE_KEY)) localStorage.setItem(STORAGE_KEY, raw);
       }
     } catch {}
     setMounted(true);
@@ -563,9 +637,24 @@ export default function Dashboard() {
     );
   }
 
-  const results = calculateBonus(inputs);
+  const results    = calculateBonus(inputs);
   const weeksCompleted = 52 - inputs.weeksRemaining;
-  const fiscalPct = Math.min(100, (weeksCompleted / 52) * 100);
+  const fiscalPct  = Math.min(100, (weeksCompleted / 52) * 100);
+  const todayStr   = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  // Stacked bar data — "Total production today"
+  const productionSegments = [
+    { label: 'Collections', value: inputs.currentCollections, color: CHART_BLUE  },
+    { label: 'AR',          value: inputs.currentAR,          color: CHART_AMBER },
+    { label: 'WIP',         value: inputs.currentWIP,         color: CHART_GREEN },
+  ];
+
+  // Stacked bar data — "Total projected collections"
+  const projectedNew = Math.max(0, results.totalProjectedCollections - inputs.currentCollections);
+  const collectionsSegments = [
+    { label: 'Received',  value: inputs.currentCollections, color: CHART_BLUE },
+    { label: 'Projected', value: projectedNew,              color: CHART_TEAL  },
+  ];
 
   return (
     <div className="min-h-screen bg-background">
@@ -605,21 +694,25 @@ export default function Dashboard() {
         {/* ── Metric Cards ───────────────────────────────────────────────── */}
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <MetricCard
-            title="Total pipeline today"
+            title="Total production today"
             rawValue={results.totalPipeline}
             format={fmtShort}
             sub="Collections + AR + WIP"
             icon={Layers}
             animDelay={0}
-          />
+          >
+            <StackedBar segments={productionSegments} />
+          </MetricCard>
           <MetricCard
             title="Total projected collections"
             rawValue={results.totalProjectedCollections}
             format={fmtShort}
-            sub={`${fmtShort(inputs.currentCollections)} received + ${fmtShort(results.totalProjectedCollections - inputs.currentCollections)} projected`}
+            sub={`${fmtShort(inputs.currentCollections)} received + ${fmtShort(projectedNew)} projected`}
             icon={DollarSign}
             animDelay={80}
-          />
+          >
+            <StackedBar segments={collectionsSegments} />
+          </MetricCard>
           <MetricCard
             title="Projected bonus"
             rawValue={results.bonus}
@@ -643,7 +736,7 @@ export default function Dashboard() {
 
         {/* ── Inputs (horizontal compact) ────────────────────────────────── */}
         <div className={`${card} p-5 no-print`}>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-foreground">Inputs</h2>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="text-blue-400 font-mono tabular-nums font-medium">{fiscalPct.toFixed(0)}%</span>
@@ -651,31 +744,60 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* FY progress bar */}
-          <div className="space-y-1 mb-4">
+          {/* Weeks remaining — above the bar, right-aligned */}
+          <div className="flex justify-end text-xs text-muted-foreground/60 mb-1">
+            <span>{Math.round(inputs.weeksRemaining)} wks remaining</span>
+          </div>
+
+          {/* FY progress bar with current date positioned at the fill point */}
+          <div>
             <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
               <div
                 className="h-full rounded-full bg-blue-500 transition-all duration-500"
                 style={{ width: `${fiscalPct}%` }}
               />
             </div>
-            <div className="flex justify-between text-xs text-muted-foreground/60">
+            {/* Current date pinned at the progress fill point */}
+            <div className="relative h-5 mt-0.5">
+              <span
+                className="absolute text-[10px] text-blue-400/80 font-mono -translate-x-1/2 whitespace-nowrap"
+                style={{ left: `${Math.min(fiscalPct, 96)}%` }}
+              >
+                {todayStr}
+              </span>
+            </div>
+            {/* Endpoints below */}
+            <div className="flex justify-between text-xs text-muted-foreground/40">
               <span>Nov 1</span>
-              <span>{Math.round(inputs.weeksRemaining)} wks remaining</span>
               <span>Oct 31</span>
             </div>
           </div>
 
-          {/* Three groups side-by-side */}
-          <div className="grid grid-cols-3 items-start divide-x divide-white/[0.06]">
+          {/* Three input groups side-by-side */}
+          <div className="grid grid-cols-3 items-start divide-x divide-white/[0.06] mt-5">
 
-            {/* Group 1: Current pipeline */}
+            {/* Group 1: Current production */}
             <div className="pr-5">
-              <p className={`${sectionLabel} mb-2`}>Current pipeline</p>
+              <p className={`${sectionLabel} mb-2`}>Current production</p>
               <div className="grid grid-cols-3 gap-2 items-start">
-                <TextInput labelText="Collections" value={inputs.currentCollections} onChange={update('currentCollections')} prefix="$" suffix="K" scale={1000} placeholder="500" />
-                <TextInput labelText="Accts. receivable" value={inputs.currentAR} onChange={update('currentAR')} prefix="$" suffix="K" scale={1000} placeholder="150" />
-                <TextInput labelText="WIP" value={inputs.currentWIP} onChange={update('currentWIP')} prefix="$" suffix="K" scale={1000} placeholder="75" />
+                <TextInput
+                  labelText="Collections"
+                  value={inputs.currentCollections}
+                  onChange={update('currentCollections')}
+                  prefix="$" suffix="K" scale={1000} placeholder="500"
+                />
+                <TextInput
+                  labelText="Accounts receivable"
+                  value={inputs.currentAR}
+                  onChange={update('currentAR')}
+                  prefix="$" suffix="K" scale={1000} placeholder="150"
+                />
+                <TextInput
+                  labelText="WIP"
+                  value={inputs.currentWIP}
+                  onChange={update('currentWIP')}
+                  prefix="$" suffix="K" scale={1000} placeholder="75"
+                />
               </div>
             </div>
 
@@ -684,9 +806,24 @@ export default function Dashboard() {
               <p className={`${sectionLabel} mb-2`}>Projections</p>
               <div className="grid grid-cols-4 gap-2 items-start">
                 <LevelSelect level={level} onLevelChange={handleLevelChange} />
-                <TextInput labelText="Utilization" value={inputs.projectedUtilization} onChange={update('projectedUtilization')} suffix="%" placeholder="80" />
-                <TextInput labelText="Cur. WIP real." value={inputs.currentWipRealizationRate} onChange={update('currentWipRealizationRate')} suffix="%" placeholder="85" />
-                <TextInput labelText="Fut. WIP real." value={inputs.futureWipRealizationRate} onChange={update('futureWipRealizationRate')} suffix="%" placeholder="50" />
+                <TextInput
+                  labelText="Projected utilization"
+                  value={inputs.projectedUtilization}
+                  onChange={update('projectedUtilization')}
+                  suffix="%" placeholder="80"
+                />
+                <TextInput
+                  labelText="Current WIP realization"
+                  value={inputs.currentWipRealizationRate}
+                  onChange={update('currentWipRealizationRate')}
+                  suffix="%" placeholder="85"
+                />
+                <TextInput
+                  labelText="Future WIP realization"
+                  value={inputs.futureWipRealizationRate}
+                  onChange={update('futureWipRealizationRate')}
+                  suffix="%" placeholder="50"
+                />
               </div>
             </div>
 
@@ -694,9 +831,24 @@ export default function Dashboard() {
             <div className="pl-5">
               <p className={`${sectionLabel} mb-2`}>Compensation</p>
               <div className="grid grid-cols-3 gap-2 items-start">
-                <TextInput labelText="Base salary" value={inputs.baseSalary} onChange={update('baseSalary')} prefix="$" suffix="K" scale={1000} placeholder="200" />
-                <TextInput labelText="Perf. multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
-                <TextInput labelText="Weeks rem." value={inputs.weeksRemaining} onChange={update('weeksRemaining')} suffix=" wks" decimals={0} placeholder="28" />
+                <TextInput
+                  labelText="Base salary"
+                  value={inputs.baseSalary}
+                  onChange={update('baseSalary')}
+                  prefix="$" suffix="K" scale={1000} placeholder="200"
+                />
+                <TextInput
+                  labelText="Performance multiple"
+                  value={inputs.performanceMultiple}
+                  onChange={update('performanceMultiple')}
+                  suffix="%" placeholder="50"
+                />
+                <TextInput
+                  labelText="Weeks remaining"
+                  value={inputs.weeksRemaining}
+                  onChange={update('weeksRemaining')}
+                  suffix=" wks" decimals={0} placeholder="28"
+                />
               </div>
             </div>
 
@@ -705,18 +857,24 @@ export default function Dashboard() {
 
         {/* ── Chart + Sensitivity side-by-side ───────────────────────────── */}
         <div className="grid grid-cols-2 gap-5 items-stretch" style={{ minHeight: '420px' }}>
-          <PipelineChart inputs={inputs} />
+          <ProductionChart
+            inputs={inputs}
+            totalProjectedCollections={results.totalProjectedCollections}
+          />
 
-          {/* Sensitivity table */}
           <div className={`${card} p-5 no-print h-full`}>
             <div className="mb-4">
               <h2 className="text-sm font-semibold text-foreground mb-1">Sensitivity analysis</h2>
-              <p className="text-xs text-muted-foreground">
-                Bonus at varying performance multiples × projected utilization ·{' '}
-                <span className="text-red-400">red = $0</span> ·{' '}
-                <span className="text-emerald-400">green = &gt;50% of salary</span> ·{' '}
-                <span className="text-blue-400">blue = current inputs</span>
-              </p>
+              <div className="text-xs text-muted-foreground space-y-0.5">
+                <div>Bonus at varying performance multiples × projected utilization</div>
+                <div>
+                  <span className="text-red-400">red = $0</span>
+                  {' · '}
+                  <span className="text-emerald-400">green = &gt;50% of salary</span>
+                  {' · '}
+                  <span className="text-blue-400">blue = current inputs</span>
+                </div>
+              </div>
             </div>
             <SensitivityTable inputs={inputs} />
           </div>
