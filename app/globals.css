@@ -1,67 +1,101 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+/* ── Dark Financial Dashboard Theme ──────────────────────────────────────── */
 
-  /* shadcn color tokens */
-  --card: #ffffff;
-  --card-foreground: #0f172a;
-  --popover: #ffffff;
-  --popover-foreground: #0f172a;
-  --primary: #1e293b;
-  --primary-foreground: #f8fafc;
-  --secondary: #f1f5f9;
-  --secondary-foreground: #1e293b;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f1f5f9;
-  --accent-foreground: #1e293b;
-  --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
-  --border: #e2e8f0;
-  --input: #e2e8f0;
-  --ring: #1e293b;
-  --radius: 0.5rem;
+:root {
+  --background:            #080D1A;
+  --foreground:            #F1F5F9;
+  --card:                  #0F1629;
+  --card-foreground:       #F1F5F9;
+  --popover:               #131D35;
+  --popover-foreground:    #F1F5F9;
+  --primary:               #3B82F6;
+  --primary-foreground:    #FFFFFF;
+  --secondary:             #1A2540;
+  --secondary-foreground:  #94A3B8;
+  --muted:                 #141E33;
+  --muted-foreground:      #64748B;
+  --accent:                #22C55E;
+  --accent-foreground:     #052E16;
+  --destructive:           #EF4444;
+  --destructive-foreground: #FFF;
+  --border:                rgba(255, 255, 255, 0.07);
+  --input:                 rgba(255, 255, 255, 0.05);
+  --ring:                  #3B82F6;
+  --radius:                1rem;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
+  --color-background:        var(--background);
+  --color-foreground:        var(--foreground);
+  --color-card:              var(--card);
+  --color-card-foreground:   var(--card-foreground);
+  --color-popover:           var(--popover);
   --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
+  --color-primary:           var(--primary);
   --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
+  --color-secondary:         var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
+  --color-muted:             var(--muted);
+  --color-muted-foreground:  var(--muted-foreground);
+  --color-accent:            var(--accent);
   --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
+  --color-destructive:       var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-border:            var(--border);
+  --color-input:             var(--input);
+  --color-ring:              var(--ring);
+  --font-sans:               var(--font-dm-sans), system-ui, sans-serif;
+  --font-mono:               var(--font-dm-mono), 'Courier New', monospace;
 }
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
 
 body {
   background: var(--background);
   color: var(--foreground);
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
 }
 
+/* Tabular numbers on all numeric displays */
+.tabular-nums,
+input[type="text"].font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Keyframe Animations ──────────────────────────────────────────────────── */
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+@keyframes pulseRing {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5); }
+  50%       { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.15); }
+}
+
+.animate-fade-up {
+  animation: fadeSlideUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-pulse-ring {
+  animation: pulseRing 2s ease-in-out infinite;
+}
+
+/* ── Print ────────────────────────────────────────────────────────────────── */
+
 @media print {
-  .no-print {
-    display: none !important;
-  }
-  .print-section {
-    display: block !important;
-  }
-  body {
-    background: white;
+  .no-print   { display: none !important; }
+  body        { background: white; color: black; }
+}
+
+/* ── Reduced Motion ───────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:       0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration:      0.01ms !important;
   }
 }
