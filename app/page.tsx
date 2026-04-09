@@ -33,14 +33,14 @@ const LEVELS = [
 const OLD_STORAGE_KEY = 'bonusDashboardSettings';
 const STORAGE_KEY     = 'bonusDashboardSettingsV2';
 
-const CHART_BLUE  = '#3266ad';
-const CHART_GREEN = '#3B6D11';
-const CHART_AMBER = '#F59E0B';
+const CHART_BLUE  = '#4472C4';
+const CHART_GREEN = '#2E75B6';
+const CHART_AMBER = '#C0504D';
 
-const BAR_COLLECTIONS = '#1d4ed8';
-const BAR_AR          = '#b45309';
-const BAR_WIP         = '#15803d';
-const BAR_PROJECTED   = '#0e7490';
+const BAR_COLLECTIONS = '#2E75B6';
+const BAR_AR          = '#C0504D';
+const BAR_WIP         = '#4472C4';
+const BAR_PROJECTED   = '#95B3D7';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
@@ -185,9 +185,9 @@ function defaultInputs(): BonusInputs {
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
-const card         = 'bg-[#0F1629] border border-white/[0.07] rounded-2xl';
-const inputCls     = 'h-10 w-full rounded-xl border border-white/[0.10] bg-white/[0.04] px-2 text-sm font-mono tabular-nums text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-150 cursor-text';
-const sectionLabel = 'text-xs font-semibold text-blue-400/80 tracking-wide shrink-0';
+const card         = 'bg-[#172435] border border-white/[0.08] rounded-2xl';
+const inputCls     = 'h-10 w-full rounded-xl border border-white/[0.10] bg-white/[0.04] px-2 text-sm font-mono tabular-nums text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#2E75B6]/50 focus:border-[#2E75B6]/50 transition-all duration-150 cursor-text';
+const sectionLabel = 'text-xs font-semibold text-[#95B3D7] tracking-wide shrink-0';
 
 // ─── TextInput ────────────────────────────────────────────────────────────────
 
@@ -255,7 +255,7 @@ function LevelSelect({ level, onLevelChange }: {
           className={`${inputCls} appearance-none pr-7 cursor-pointer overflow-hidden`}
           style={{ textOverflow: 'ellipsis' }}
         >
-          {LEVELS.map((l) => <option key={l.name} value={l.name} className="bg-[#0F1629]">{l.name}</option>)}
+          {LEVELS.map((l) => <option key={l.name} value={l.name} className="bg-[#172435]">{l.name}</option>)}
         </select>
         <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
       </div>
@@ -471,6 +471,13 @@ function BreakevenCard({ results, projectedUtilization }: {
 
 // ─── SensitivityTable ─────────────────────────────────────────────────────────
 
+interface SensTooltipData {
+  util: number; perf: number;
+  projectedCollections: number;
+  grossBonus: number;
+  x: number; y: number;
+}
+
 function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
   const {
     currentCollections, currentAR, currentWIP,
@@ -478,6 +485,8 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
     currentWipRealizationRate, futureWipRealizationRate,
     performanceMultiple, projectedUtilization,
   } = inputs;
+
+  const [tooltip, setTooltip] = useState<SensTooltipData | null>(null);
 
   const perfRows = [-3, -2, -1, 0, 1, 2, 3].map((d) =>
     Math.min(100, Math.max(0, performanceMultiple + d))
@@ -487,7 +496,7 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
   );
   const activeUtil = utilCols[3];
 
-  // Pre-compute all 49 values for gradient scaling (transparent → green)
+  // Pre-compute all 49 values for gradient scaling (transparent → steel blue)
   const allBonuses = perfRows.flatMap((perf) =>
     utilCols.map((util) =>
       calcBonusAt(currentCollections, currentAR, currentWIP, billRate, util, baseSalary, perf, weeksRemaining, currentWipRealizationRate, futureWipRealizationRate)
@@ -501,7 +510,33 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
   const Y_AXIS_TOP_SPACER = '3.5rem';
 
   return (
-    <div className="flex gap-0">
+    <div className="flex gap-0 relative">
+      {/* Styled tooltip */}
+      {tooltip && (
+        <div
+          className="fixed z-50 pointer-events-none"
+          style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
+        >
+          <div className="bg-[#1D2E44] border border-[#2E75B6]/40 rounded-xl shadow-2xl px-3.5 py-3 text-xs space-y-1.5 min-w-[200px]">
+            <p className="font-semibold text-[#DEEAF1] mb-2 border-b border-white/[0.08] pb-1.5">
+              Util {tooltip.util}% × Perf {tooltip.perf}%
+            </p>
+            <div className="flex justify-between gap-4">
+              <span className="text-[#95B3D7]">Projected collections</span>
+              <span className="font-mono text-[#DEEAF1] tabular-nums">{fmtShort(tooltip.projectedCollections)}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-[#95B3D7]">Gross bonus</span>
+              <span className={`font-mono tabular-nums ${tooltip.grossBonus > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtCurrency(tooltip.grossBonus)}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-[#95B3D7]">Net bonus <span className="opacity-60">(est. 35%)</span></span>
+              <span className={`font-mono tabular-nums ${tooltip.grossBonus > 0 ? 'text-emerald-300' : 'text-red-400'}`}>{fmtCurrency(tooltip.grossBonus * 0.65)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Y-axis */}
       <div className="flex flex-col items-center shrink-0 mr-2">
         <div style={{ height: Y_AXIS_TOP_SPACER, flexShrink: 0 }} />
@@ -530,7 +565,7 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
               <TableHead className="w-14" />
               {utilCols.map((u, ci) => (
                 <TableHead key={ci}
-                  className={`text-center text-xs ${u === activeUtil ? 'text-blue-400 font-bold' : 'text-muted-foreground'}`}>
+                  className={`text-center text-xs ${u === activeUtil ? 'text-[#4472C4] font-bold' : 'text-muted-foreground'}`}>
                   {u}%
                 </TableHead>
               ))}
@@ -539,7 +574,7 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
           <TableBody>
             {perfRows.map((perf, ri) => (
               <TableRow key={ri} className="border-white/[0.04] hover:bg-white/[0.02]">
-                <TableCell className={`text-center text-xs font-semibold py-2 ${ri === 3 ? 'text-blue-400' : 'text-muted-foreground'}`}>
+                <TableCell className={`text-center text-xs font-semibold py-2 ${ri === 3 ? 'text-[#4472C4]' : 'text-muted-foreground'}`}>
                   {perf}%
                 </TableCell>
                 {utilCols.map((util, ci) => {
@@ -553,25 +588,30 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
                   const fromCur    = currentWIP * (currentWipRealizationRate / 100);
                   const fromFut    = projNewWIP * (futureWipRealizationRate / 100);
                   const total      = currentCollections + currentAR + fromCur + fromFut;
-                  const tooltip    = `Util ${util}% × Perf ${perf}%\nNew WIP: ${fmtShort(projNewWIP)}\nFrom cur WIP: ${fmtShort(fromCur)}\nFrom fut WIP: ${fmtShort(fromFut)}\nTotal: ${fmtShort(total)}\nBonus: ${fmtCurrency(bonus)}`;
 
                   let cellStyle: React.CSSProperties = {};
                   let cellText = 'text-white';
                   if (bonus <= 0) {
-                    cellStyle = { background: 'rgba(220, 38, 38, 0.30)' };
+                    cellStyle = { background: 'rgba(192, 80, 77, 0.30)' };
                     cellText  = 'text-red-300';
                   } else {
                     const range = maxPositive - minPositive;
                     const alpha = range > 0 ? ((bonus - minPositive) / range) * 0.55 : 0.55;
-                    cellStyle = { background: `rgba(21, 128, 61, ${alpha.toFixed(3)})` };
+                    cellStyle = { background: `rgba(46, 117, 182, ${alpha.toFixed(3)})` };
                   }
                   if (isActive) {
-                    cellStyle = { ...cellStyle, outline: '2px solid #3b82f6', outlineOffset: '-2px' };
+                    cellStyle = { ...cellStyle, outline: '2px solid #2E75B6', outlineOffset: '-2px' };
                   }
 
                   return (
-                    <TableCell key={ci} title={tooltip} style={cellStyle}
-                      className={`text-center font-mono text-xs py-2 cursor-default transition-colors duration-100 ${cellText} ${isActive ? 'font-bold' : ''}`}>
+                    <TableCell
+                      key={ci}
+                      style={cellStyle}
+                      onMouseEnter={(e) => setTooltip({ util, perf, projectedCollections: total, grossBonus: bonus, x: e.clientX, y: e.clientY })}
+                      onMouseMove={(e) => setTooltip((t) => t ? { ...t, x: e.clientX, y: e.clientY } : t)}
+                      onMouseLeave={() => setTooltip(null)}
+                      className={`text-center font-mono text-xs py-2 cursor-default transition-colors duration-100 ${cellText} ${isActive ? 'font-bold' : ''}`}
+                    >
                       {fmtShort(bonus)}
                     </TableCell>
                   );
@@ -629,10 +669,10 @@ function ProductionTooltip({ active, payload }: {
   const productionAbove   = payload.find((p) => p.dataKey === 'productionAbove')?.value ?? 0;
   const totalCompensation = payload.find((p) => p.dataKey === 'totalCompensation')?.value ?? 0;
   return (
-    <div className="bg-[#131D35] border border-white/[0.10] rounded-xl shadow-xl px-3 py-2.5 text-xs space-y-1">
+    <div className="bg-[#1D2E44] border border-white/[0.10] rounded-xl shadow-xl px-3 py-2.5 text-xs space-y-1">
       <p className="font-semibold text-foreground mb-1.5">{point?.fullDate ?? ''}</p>
-      <p style={{ color: '#60A5FA' }}>Collections: {fmtCurrency(collections)}</p>
-      <p style={{ color: '#86EFAC' }}>Gross production: {fmtCurrency(collections + productionAbove)}</p>
+      <p style={{ color: '#4472C4' }}>Collections: {fmtCurrency(collections)}</p>
+      <p style={{ color: '#95B3D7' }}>Gross production: {fmtCurrency(collections + productionAbove)}</p>
       <p style={{ color: CHART_AMBER }}>Total compensation: {fmtCurrency(totalCompensation)}</p>
     </div>
   );
@@ -690,117 +730,19 @@ function ProductionChart({
   );
 }
 
-// ─── ReverseCalculator ────────────────────────────────────────────────────────
-
-function ReverseCalculator({ inputs, open, onToggle }: { inputs: BonusInputs; open: boolean; onToggle: () => void }) {
-  const [targetRaw, setTargetRaw] = useState('');
-
-  const {
-    baseSalary, performanceMultiple, currentCollections, currentAR, currentWIP,
-    currentWipRealizationRate, billRate, weeksRemaining, futureWipRealizationRate,
-    projectedUtilization,
-  } = inputs;
-
-  const targetBonus       = parseFloat(targetRaw.replace(/[^0-9.]/g, '')) || 0;
-  const targetCollections = performanceMultiple > 0
-    ? (baseSalary + targetBonus) / (performanceMultiple / 100) : Infinity;
-  const remaining = !isFinite(targetCollections) ? Infinity
-    : targetCollections - currentCollections - currentAR - (currentWIP * (currentWipRealizationRate / 100));
-  const futureWipDenom = billRate * 40 * weeksRemaining * (futureWipRealizationRate / 100);
-  const requiredUtil   = !isFinite(remaining) ? Infinity
-    : remaining <= 0 ? 0
-    : futureWipDenom > 0 ? (remaining / futureWipDenom) * 100 : Infinity;
-  const requiredHrs    = isFinite(requiredUtil) && requiredUtil <= 200 ? (requiredUtil / 100) * 40 : null;
-
-  // 11 pill presets: 0%, 10%, 20%, …, 100% of base salary
-  const presets = Array.from({ length: 11 }, (_, i) => ({
-    label: `${i * 10}%`,
-    value: baseSalary * (i * 10) / 100,
-  }));
-
-  return (
-    <div className={`${card} no-print overflow-hidden`}>
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
-      >
-        <span className="text-sm font-semibold text-foreground">Reverse calculator</span>
-        {open
-          ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
-          : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-      </button>
-
-      {open && (
-        <div className="px-5 pb-5 space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">Target bonus ($)</label>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-muted-foreground font-mono">$</span>
-              <input
-                type="text"
-                value={targetRaw}
-                onChange={(e) => setTargetRaw(e.target.value)}
-                placeholder="e.g. 150000"
-                className={`${inputCls} max-w-xs`}
-              />
-            </div>
-          </div>
-
-          {/* 11 pill presets at 0%–100% of base salary */}
-          <div className="flex flex-wrap gap-1.5">
-            {presets.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => setTargetRaw(p.value.toFixed(0))}
-                className="text-xs px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/[0.10] text-muted-foreground hover:text-foreground transition-all cursor-pointer border border-white/[0.08] hover:border-white/[0.16]"
-              >
-                {p.label} of base
-              </button>
-            ))}
-          </div>
-
-          {targetRaw.trim() !== '' && (
-            <div className="rounded-xl border border-white/[0.10] bg-white/[0.02] p-4 space-y-2.5">
-              {requiredUtil <= 0 ? (
-                <p className="text-xs text-emerald-400">Already on track with current production</p>
-              ) : !isFinite(requiredUtil) || requiredUtil > 200 ? (
-                <p className="text-xs text-red-400">Not achievable this year — required utilization exceeds 200%</p>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground text-xs">Required projected utilization</span>
-                    <span className="font-mono font-semibold text-foreground">{requiredUtil.toFixed(1)}%</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground text-xs">Required weekly billing</span>
-                    <span className="font-mono font-semibold text-foreground">{requiredHrs?.toFixed(1)} hrs/wk</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground/70">
-                    {(requiredUtil - projectedUtilization) >= 0
-                      ? `+${(requiredUtil - projectedUtilization).toFixed(1)}% above your current projection`
-                      : `${(requiredUtil - projectedUtilization).toFixed(1)}% below your current projection`}
-                  </p>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── LastYearInputs ───────────────────────────────────────────────────────────
 
 function LastYearInputs({
   lastYearBaseSalary, lastYearBonus, lastYearCollections,
   setLastYearBaseSalary, setLastYearBonus, setLastYearCollections,
   open, onToggle,
+  weeksRemaining, fiscalPct, todayStr,
 }: {
   lastYearBaseSalary: number; lastYearBonus: number; lastYearCollections: number;
   setLastYearBaseSalary: (v: number) => void; setLastYearBonus: (v: number) => void;
   setLastYearCollections: (v: number) => void;
   open: boolean; onToggle: () => void;
+  weeksRemaining: number; fiscalPct: number; todayStr: string;
 }) {
   return (
     <div className={`${card} no-print overflow-hidden`}>
@@ -814,12 +756,36 @@ function LastYearInputs({
           : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
       </button>
       {open && (
-        <div className="px-5 pb-5">
-          <p className="text-xs text-muted-foreground/60 mb-4">Used for year-over-year comparisons on metric cards.</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-            <TextInput labelText="Base salary" value={lastYearBaseSalary} onChange={setLastYearBaseSalary} prefix="$" suffix="K" scale={1000} placeholder="200" />
-            <TextInput labelText="Bonus"       value={lastYearBonus}      onChange={setLastYearBonus}      prefix="$" suffix="K" scale={1000} placeholder="0"   />
-            <TextInput labelText="Collections" value={lastYearCollections} onChange={setLastYearCollections} prefix="$" suffix="K" scale={1000} placeholder="0"   />
+        <div className="px-5 pb-5 space-y-5">
+          {/* FY Progress bar */}
+          <div>
+            <div className="flex justify-end text-xs text-muted-foreground/60 mb-1">
+              <span>{weeksRemaining} wks remaining</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+              <div className="h-full rounded-full bg-[#2E75B6] transition-all duration-500"
+                   style={{ width: `${fiscalPct}%` }} />
+            </div>
+            <div className="relative h-5 mt-0.5">
+              <span
+                className="absolute text-[10px] text-[#4472C4]/80 font-mono -translate-x-1/2 whitespace-nowrap"
+                style={{ left: `${Math.min(fiscalPct, 96)}%` }}
+              >
+                {todayStr}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground/40">
+              <span>Nov 1</span><span>Oct 31</span>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-muted-foreground/60 mb-3">Used for year-over-year comparisons on metric cards.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+              <TextInput labelText="Base salary" value={lastYearBaseSalary} onChange={setLastYearBaseSalary} prefix="$" suffix="K" scale={1000} placeholder="200" />
+              <TextInput labelText="Bonus"       value={lastYearBonus}      onChange={setLastYearBonus}      prefix="$" suffix="K" scale={1000} placeholder="0"   />
+              <TextInput labelText="Collections" value={lastYearCollections} onChange={setLastYearCollections} prefix="$" suffix="K" scale={1000} placeholder="0"   />
+            </div>
           </div>
         </div>
       )}
@@ -845,7 +811,7 @@ function generatePrintHTML(
   const utilDeltas = [-15, -10, -5, 0, 5, 10, 15];
   const sensHeaders = utilDeltas.map((d) => {
     const u  = Math.min(200, Math.max(0, inputs.projectedUtilization + d));
-    const hl = u === inputs.projectedUtilization ? ' style="color:#3b82f6"' : '';
+    const hl = u === inputs.projectedUtilization ? ' style="color:#2E75B6"' : '';
     return `<th${hl}>${u}%</th>`;
   }).join('');
   const sensRows = perfDeltas.map((dp, ri) => {
@@ -856,7 +822,7 @@ function generatePrintHTML(
       const cls   = (ri === 3 && ci === 3) ? 'sens-active' : bonus <= 0 ? 'sens-neg' : 'sens-pos';
       return `<td class="${cls}">${fs(bonus)}</td>`;
     }).join('');
-    const phd = ri === 3 ? ' style="color:#3b82f6"' : '';
+    const phd = ri === 3 ? ' style="color:#2E75B6"' : '';
     return `<tr><th${phd}>${perf}%</th>${cells}</tr>`;
   }).join('');
 
@@ -905,7 +871,7 @@ function generatePrintHTML(
     .num { text-align: right; font-variant-numeric: tabular-nums; font-family: monospace; }
     .bold { font-weight: 600; background: #f8fafc; }
     .sens-table th, .sens-table td { text-align: center; padding: 5px 8px; font-size: 11px; font-family: monospace; }
-    .sens-active { outline: 2px solid #3b82f6; font-weight: 700; }
+    .sens-active { outline: 2px solid #2E75B6; font-weight: 700; }
     .sens-pos { background: rgba(21,128,61,0.15); }
     .sens-neg { background: rgba(220,38,38,0.20); color: #dc2626; }
     .footer { margin-top: 32px; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
@@ -1003,7 +969,7 @@ export default function Dashboard() {
           level?: string; lastYearBonus?: number;
           lastYearBaseSalary?: number; lastYearCollections?: number;
         };
-        const { level: savedLevel, lastYearBonus: savedLYB, lastYearBaseSalary: savedLYBS, lastYearCollections: savedLYC, ...savedInputs } = parsed;
+        const { level: savedLevel, lastYearBonus: savedLYB, lastYearBaseSalary: savedLYBS, lastYearCollections: savedLYC, weeksRemaining: _wr, ...savedInputs } = parsed;
         setInputs((prev) => ({ ...prev, ...savedInputs }));
         if (savedLevel) setLevel(savedLevel);
         if (savedLYB)   setLastYearBonus(savedLYB);
@@ -1139,8 +1105,8 @@ export default function Dashboard() {
       <header className="border-b border-white/[0.06] px-6 py-3.5 no-print sticky top-0 z-40 backdrop-blur-sm bg-background/80">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded-lg bg-blue-500/20 flex items-center justify-center">
-              <TrendingUp className="h-4 w-4 text-blue-400" />
+            <div className="w-7 h-7 rounded-lg bg-[#2E75B6]/20 flex items-center justify-center">
+              <TrendingUp className="h-4 w-4 text-[#4472C4]" />
             </div>
             <div>
               <h1 className="text-sm font-semibold text-foreground tracking-tight">Bonus Dashboard</h1>
@@ -1281,37 +1247,15 @@ export default function Dashboard() {
 
         {/* ── Inputs (horizontal compact) ────────────────────────────────── */}
         <div className={`${card} p-5 no-print`}>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold text-foreground">Inputs</h2>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="text-blue-400 font-mono tabular-nums font-medium">{fiscalPct.toFixed(0)}%</span>
-              <span>of {fyLabel} elapsed</span>
+              <span className="text-[#4472C4] font-mono tabular-nums font-medium">{fiscalPct.toFixed(0)}%</span>
+              <span>of {fyLabel} elapsed · {inputs.weeksRemaining} wks remaining</span>
             </div>
           </div>
 
-          <div className="flex justify-end text-xs text-muted-foreground/60 mb-1">
-            <span>{Math.round(inputs.weeksRemaining)} wks remaining</span>
-          </div>
-
-          <div>
-            <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-              <div className="h-full rounded-full bg-blue-500 transition-all duration-500"
-                   style={{ width: `${fiscalPct}%` }} />
-            </div>
-            <div className="relative h-5 mt-0.5">
-              <span
-                className="absolute text-[10px] text-blue-400/80 font-mono -translate-x-1/2 whitespace-nowrap"
-                style={{ left: `${Math.min(fiscalPct, 96)}%` }}
-              >
-                {todayStr}
-              </span>
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground/40">
-              <span>Nov 1</span><span>Oct 31</span>
-            </div>
-          </div>
-
-          <div className="mt-5" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr 4fr 3fr', gap: '0' }}>
 
             {/* Group 1: Current production */}
             <div className="pr-5 border-r border-white/[0.06]">
@@ -1358,18 +1302,14 @@ export default function Dashboard() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <TextInput labelText="Performance multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <TextInput labelText="Weeks remaining" value={inputs.weeksRemaining} onChange={update('weeksRemaining')} suffix=" wks" decimals={0} placeholder="28" />
-                </div>
               </div>
             </div>
 
           </div>
         </div>
 
-        {/* ── Collapsibles: Reverse Calculator + Last Year Inputs ────────── */}
-        <div className="grid grid-cols-2 gap-5 no-print">
-          <ReverseCalculator inputs={inputs} open={collapsiblesOpen} onToggle={() => setCollapsiblesOpen((o) => !o)} />
+        {/* ── Last Year Inputs (collapsible) ─────────────────────────────── */}
+        <div className="no-print">
           <LastYearInputs
             lastYearBaseSalary={lastYearBaseSalary}
             lastYearBonus={lastYearBonus}
@@ -1379,6 +1319,9 @@ export default function Dashboard() {
             setLastYearCollections={setLastYearCollections}
             open={collapsiblesOpen}
             onToggle={() => setCollapsiblesOpen((o) => !o)}
+            weeksRemaining={inputs.weeksRemaining}
+            fiscalPct={fiscalPct}
+            todayStr={todayStr}
           />
         </div>
 
@@ -1396,7 +1339,7 @@ export default function Dashboard() {
                   {' · '}
                   <span className="text-emerald-400">green = positive (darker = larger)</span>
                   {' · '}
-                  <span className="text-blue-400">blue outline = current inputs</span>
+                  <span className="text-[#4472C4]">blue outline = current inputs</span>
                 </div>
               </div>
             </div>

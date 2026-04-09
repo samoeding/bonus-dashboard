@@ -41,7 +41,7 @@ export function calcWeeksRemaining(): number {
   if (today > fyEnd) fyEnd = new Date(yr + 1, 9, 31, 23, 59, 59);
   const ms = fyEnd.getTime() - today.getTime();
   const weeks = Math.max(0, ms / (7 * 24 * 60 * 60 * 1000));
-  return Math.round(weeks * 10) / 10;
+  return Math.floor(weeks);
 }
 
 export function calculateBonus(inputs: BonusInputs): BonusResults {
