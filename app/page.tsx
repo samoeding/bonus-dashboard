@@ -735,60 +735,19 @@ function ProductionChart({
 function LastYearInputs({
   lastYearBaseSalary, lastYearBonus, lastYearCollections,
   setLastYearBaseSalary, setLastYearBonus, setLastYearCollections,
-  open, onToggle,
-  weeksRemaining, fiscalPct, todayStr,
 }: {
   lastYearBaseSalary: number; lastYearBonus: number; lastYearCollections: number;
   setLastYearBaseSalary: (v: number) => void; setLastYearBonus: (v: number) => void;
   setLastYearCollections: (v: number) => void;
-  open: boolean; onToggle: () => void;
-  weeksRemaining: number; fiscalPct: number; todayStr: string;
 }) {
   return (
-    <div className={`${card} no-print overflow-hidden`}>
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
-      >
-        <span className="text-sm font-semibold text-foreground">Last year&apos;s inputs</span>
-        {open
-          ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
-          : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-      </button>
-      {open && (
-        <div className="px-5 pb-5 space-y-5">
-          {/* FY Progress bar */}
-          <div>
-            <div className="flex justify-end text-xs text-muted-foreground/60 mb-1">
-              <span>{weeksRemaining} wks remaining</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-              <div className="h-full rounded-full bg-[#2E75B6] transition-all duration-500"
-                   style={{ width: `${fiscalPct}%` }} />
-            </div>
-            <div className="relative h-5 mt-0.5">
-              <span
-                className="absolute text-[10px] text-[#4472C4]/80 font-mono -translate-x-1/2 whitespace-nowrap"
-                style={{ left: `${Math.min(fiscalPct, 96)}%` }}
-              >
-                {todayStr}
-              </span>
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground/40">
-              <span>Nov 1</span><span>Oct 31</span>
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs text-muted-foreground/60 mb-3">Used for year-over-year comparisons on metric cards.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-              <TextInput labelText="Base salary" value={lastYearBaseSalary} onChange={setLastYearBaseSalary} prefix="$" suffix="K" scale={1000} placeholder="200" />
-              <TextInput labelText="Bonus"       value={lastYearBonus}      onChange={setLastYearBonus}      prefix="$" suffix="K" scale={1000} placeholder="0"   />
-              <TextInput labelText="Collections" value={lastYearCollections} onChange={setLastYearCollections} prefix="$" suffix="K" scale={1000} placeholder="0"   />
-            </div>
-          </div>
-        </div>
-      )}
+    <div>
+      <p className="text-xs text-muted-foreground/60 mb-3">Used for year-over-year comparisons on metric cards.</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+        <TextInput labelText="Base salary" value={lastYearBaseSalary} onChange={setLastYearBaseSalary} prefix="$" suffix="K" scale={1000} placeholder="200" />
+        <TextInput labelText="Bonus"       value={lastYearBonus}      onChange={setLastYearBonus}      prefix="$" suffix="K" scale={1000} placeholder="0"   />
+        <TextInput labelText="Collections" value={lastYearCollections} onChange={setLastYearCollections} prefix="$" suffix="K" scale={1000} placeholder="0"   />
+      </div>
     </div>
   );
 }
@@ -1306,23 +1265,31 @@ export default function Dashboard() {
             </div>
 
           </div>
-        </div>
 
-        {/* ── Last Year Inputs (collapsible) ─────────────────────────────── */}
-        <div className="no-print">
-          <LastYearInputs
-            lastYearBaseSalary={lastYearBaseSalary}
-            lastYearBonus={lastYearBonus}
-            lastYearCollections={lastYearCollections}
-            setLastYearBaseSalary={setLastYearBaseSalary}
-            setLastYearBonus={setLastYearBonus}
-            setLastYearCollections={setLastYearCollections}
-            open={collapsiblesOpen}
-            onToggle={() => setCollapsiblesOpen((o) => !o)}
-            weeksRemaining={inputs.weeksRemaining}
-            fiscalPct={fiscalPct}
-            todayStr={todayStr}
-          />
+          {/* ── Last Year Inputs (accordion within Inputs card) ────────── */}
+          <div className="mt-4 pt-4 border-t border-white/[0.06] no-print">
+            <button
+              onClick={() => setCollapsiblesOpen((o) => !o)}
+              className="w-full flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity"
+            >
+              <span className={`${sectionLabel}`}>Last year&apos;s inputs</span>
+              {collapsiblesOpen
+                ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+            </button>
+            {collapsiblesOpen && (
+              <div className="mt-3">
+                <LastYearInputs
+                  lastYearBaseSalary={lastYearBaseSalary}
+                  lastYearBonus={lastYearBonus}
+                  lastYearCollections={lastYearCollections}
+                  setLastYearBaseSalary={setLastYearBaseSalary}
+                  setLastYearBonus={setLastYearBonus}
+                  setLastYearCollections={setLastYearCollections}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ── Chart + Sensitivity side-by-side ───────────────────────────── */}
@@ -1337,9 +1304,9 @@ export default function Dashboard() {
                 <div>
                   <span className="text-red-400">red = $0 bonus</span>
                   {' · '}
-                  <span className="text-emerald-400">green = positive (darker = larger)</span>
+                  <span className="text-[#4472C4]">blue = positive (darker = larger)</span>
                   {' · '}
-                  <span className="text-[#4472C4]">blue outline = current inputs</span>
+                  <span className="text-[#2E75B6]">outline = current inputs</span>
                 </div>
               </div>
             </div>
