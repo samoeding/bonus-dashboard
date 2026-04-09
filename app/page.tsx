@@ -253,7 +253,7 @@ function LevelSelect({ level, onLevelChange }: {
             if (l) onLevelChange(l.name, l.rate);
           }}
           className={`${inputCls} appearance-none pr-7 cursor-pointer overflow-hidden`}
-          style={{ minWidth: '180px', textOverflow: 'ellipsis' }}
+          style={{ textOverflow: 'ellipsis' }}
         >
           {LEVELS.map((l) => <option key={l.name} value={l.name} className="bg-[#0F1629]">{l.name}</option>)}
         </select>
@@ -288,19 +288,22 @@ function StackedBar({ segments }: {
   if (total <= 0) return null;
   return (
     <div className="mt-3">
-      <div ref={barRef} className="flex h-4 rounded-lg overflow-hidden w-full">
+      <div ref={barRef} className="flex h-5 rounded-lg overflow-hidden w-full">
         {segments.map((seg, i) => {
           const pct = (seg.value / total) * 100;
           const px  = (pct / 100) * barWidth;
           return (
             <div
               key={i}
-              className="flex items-center justify-center overflow-hidden shrink-0"
+              className="relative overflow-hidden shrink-0"
               style={{ width: `${pct}%`, background: seg.color }}
               title={`${seg.label}: ${fmtShort(seg.value)} · ${pct.toFixed(0)}%`}
             >
-              {px >= 60 && (
-                <span className="text-[9px] font-mono font-semibold text-white/90 px-0.5 leading-none truncate">
+              {px >= 50 && (
+                <span
+                  className="absolute text-[11px] font-semibold text-white leading-none pointer-events-none"
+                  style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', whiteSpace: 'nowrap' }}
+                >
                   {fmtShort(seg.value)}
                 </span>
               )}
@@ -484,13 +487,15 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
   );
   const activeUtil = utilCols[3];
 
-  // Pre-compute all 49 values for gradient scaling
+  // Pre-compute all 49 values for gradient scaling (transparent → green)
   const allBonuses = perfRows.flatMap((perf) =>
     utilCols.map((util) =>
       calcBonusAt(currentCollections, currentAR, currentWIP, billRate, util, baseSalary, perf, weeksRemaining, currentWipRealizationRate, futureWipRealizationRate)
     )
   );
-  const maxBonus = Math.max(...allBonuses.filter((b) => b > 0), 1);
+  const positiveBonuses = allBonuses.filter((b) => b > 0);
+  const minPositive = positiveBonuses.length > 0 ? Math.min(...positiveBonuses) : 0;
+  const maxPositive = positiveBonuses.length > 0 ? Math.max(...positiveBonuses) : 1;
 
   const ROW_HEADER_W    = '3.5rem';
   const Y_AXIS_TOP_SPACER = '3.5rem';
@@ -551,14 +556,14 @@ function SensitivityTable({ inputs }: { inputs: BonusInputs }) {
                   const tooltip    = `Util ${util}% × Perf ${perf}%\nNew WIP: ${fmtShort(projNewWIP)}\nFrom cur WIP: ${fmtShort(fromCur)}\nFrom fut WIP: ${fmtShort(fromFut)}\nTotal: ${fmtShort(total)}\nBonus: ${fmtCurrency(bonus)}`;
 
                   let cellStyle: React.CSSProperties = {};
-                  let cellText = 'text-foreground/80';
+                  let cellText = 'text-white';
                   if (bonus <= 0) {
                     cellStyle = { background: 'rgba(220, 38, 38, 0.30)' };
                     cellText  = 'text-red-300';
                   } else {
-                    const alpha = 0.08 + (bonus / maxBonus) * (0.50 - 0.08);
-                    cellStyle = { background: `rgba(21, 128, 61, ${alpha.toFixed(2)})` };
-                    cellText  = 'text-emerald-300';
+                    const range = maxPositive - minPositive;
+                    const alpha = range > 0 ? ((bonus - minPositive) / range) * 0.55 : 0.55;
+                    cellStyle = { background: `rgba(21, 128, 61, ${alpha.toFixed(3)})` };
                   }
                   if (isActive) {
                     cellStyle = { ...cellStyle, outline: '2px solid #3b82f6', outlineOffset: '-2px' };
@@ -687,8 +692,7 @@ function ProductionChart({
 
 // ─── ReverseCalculator ────────────────────────────────────────────────────────
 
-function ReverseCalculator({ inputs }: { inputs: BonusInputs }) {
-  const [open, setOpen] = useState(false);
+function ReverseCalculator({ inputs, open, onToggle }: { inputs: BonusInputs; open: boolean; onToggle: () => void }) {
   const [targetRaw, setTargetRaw] = useState('');
 
   const {
@@ -717,7 +721,7 @@ function ReverseCalculator({ inputs }: { inputs: BonusInputs }) {
   return (
     <div className={`${card} no-print overflow-hidden`}>
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
         className="w-full flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
       >
         <span className="text-sm font-semibold text-foreground">Reverse calculator</span>
@@ -791,16 +795,17 @@ function ReverseCalculator({ inputs }: { inputs: BonusInputs }) {
 function LastYearInputs({
   lastYearBaseSalary, lastYearBonus, lastYearCollections,
   setLastYearBaseSalary, setLastYearBonus, setLastYearCollections,
+  open, onToggle,
 }: {
   lastYearBaseSalary: number; lastYearBonus: number; lastYearCollections: number;
   setLastYearBaseSalary: (v: number) => void; setLastYearBonus: (v: number) => void;
   setLastYearCollections: (v: number) => void;
+  open: boolean; onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   return (
     <div className={`${card} no-print overflow-hidden`}>
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
         className="w-full flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
       >
         <span className="text-sm font-semibold text-foreground">Last year&apos;s inputs</span>
@@ -986,6 +991,7 @@ export default function Dashboard() {
   const [lastYearBonus, setLastYearBonus]           = useState(0);
   const [lastYearBaseSalary, setLastYearBaseSalary] = useState(0);
   const [lastYearCollections, setLastYearCollections] = useState(0);
+  const [collapsiblesOpen, setCollapsiblesOpen]     = useState(false);
   const [mounted, setMounted]                       = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1179,7 +1185,6 @@ export default function Dashboard() {
           {/* 2. Total projected collections */}
           <MetricCard title="Total projected collections" rawValue={results.totalProjectedCollections} format={fmtShort} icon={DollarSign} animDelay={60}>
             <StackedBar segments={collectionsSegments} />
-            <PacingSection results={results} weeksRemaining={inputs.weeksRemaining} />
             {collectionsYoySub}
           </MetricCard>
 
@@ -1199,10 +1204,19 @@ export default function Dashboard() {
 
           {/* 4. Bonus % of base salary */}
           <MetricCard title="Bonus % of base salary" rawValue={results.bonusPct} format={fmtPct} icon={Percent} accentColor={results.bonusPct > 50 ? '#34D399' : '#F1F5F9'} animDelay={180}>
-            <p className="text-xs mt-2 flex items-center gap-1 flex-wrap">{lastYearSub}</p>
+            {(lastYearBonus > 0 && lastYearBaseSalary > 0) ? (
+              <>
+                <p className="text-[13px] text-muted-foreground mt-2 tabular-nums">
+                  Last year: {((lastYearBonus / lastYearBaseSalary) * 100).toFixed(1)}%
+                </p>
+                <p className="text-xs mt-1 flex items-center gap-1 flex-wrap">{lastYearSub}</p>
+              </>
+            ) : (
+              <p className="text-xs mt-2 flex items-center gap-1 flex-wrap">{lastYearSub}</p>
+            )}
           </MetricCard>
 
-          {/* 5. Gap to target bonus */}
+          {/* 5. Gap to target bonus + breakeven */}
           <div
             className={`${card} p-5 hover:-translate-y-0.5 hover:border-white/[0.12] transition-all duration-150 animate-fade-up`}
             style={{ animationDelay: '240ms' }}
@@ -1239,6 +1253,29 @@ export default function Dashboard() {
                 </p>
               </>
             )}
+            {/* Breakeven utilization — embedded secondary metric */}
+            {(() => {
+              const bu = results.breakevenUtil;
+              const bCovered      = bu <= 0;
+              const bUnachievable = !isFinite(bu) || bu > 200;
+              const bAbove        = !bCovered && !bUnachievable && bu <= inputs.projectedUtilization;
+              const bColor        = bCovered || bAbove ? 'text-emerald-400' : bUnachievable ? 'text-red-400' : 'text-amber-400';
+              return (
+                <div className="mt-3 pt-3 border-t border-white/[0.08]">
+                  <p className="text-[10px] text-muted-foreground mb-1">Breakeven utilization</p>
+                  {bCovered ? (
+                    <p className={`text-xs font-semibold ${bColor}`}>Already covered by pipeline</p>
+                  ) : bUnachievable ? (
+                    <p className={`text-xs font-semibold ${bColor}`}>Not achievable this year</p>
+                  ) : (
+                    <>
+                      <p className={`text-sm font-bold font-mono tabular-nums ${bColor}`}>{bu.toFixed(1)}%</p>
+                      <p className="text-[10px] text-muted-foreground/60 mt-0.5">Min utilization for any bonus</p>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </section>
 
@@ -1274,48 +1311,65 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="flex items-start mt-5 gap-0">
+          <div className="mt-5" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0' }}>
 
             {/* Group 1: Current production */}
-            <div className="shrink-0 pr-5 border-r border-white/[0.06]">
+            <div className="pr-5 border-r border-white/[0.06]">
               <p className={`${sectionLabel} mb-2`}>Current production</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 90px)', gap: '8px', alignItems: 'start' }}>
-                <TextInput labelText="Collections"        value={inputs.currentCollections} onChange={update('currentCollections')} prefix="$" suffix="K" scale={1000} placeholder="500" />
-                <TextInput labelText="Accounts receivable" value={inputs.currentAR}          onChange={update('currentAR')}          prefix="$" suffix="K" scale={1000} placeholder="150" />
-                <TextInput labelText="WIP"                value={inputs.currentWIP}         onChange={update('currentWIP')}         prefix="$" suffix="K" scale={1000} placeholder="75"  />
+              <div className="flex gap-2">
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Collections" value={inputs.currentCollections} onChange={update('currentCollections')} prefix="$" suffix="K" scale={1000} placeholder="500" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Accounts receivable" value={inputs.currentAR} onChange={update('currentAR')} prefix="$" suffix="K" scale={1000} placeholder="150" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="WIP" value={inputs.currentWIP} onChange={update('currentWIP')} prefix="$" suffix="K" scale={1000} placeholder="75" />
+                </div>
               </div>
             </div>
 
-            {/* Group 2: Projections (breakeven moved out) */}
-            <div className="flex-1 px-5 border-r border-white/[0.06] min-w-0">
+            {/* Group 2: Projections */}
+            <div className="px-5 border-r border-white/[0.06]">
               <p className={`${sectionLabel} mb-2`}>Projections</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '180px 75px 85px 85px', gap: '8px', alignItems: 'start' }}>
-                <LevelSelect level={level} onLevelChange={handleLevelChange} />
-                <TextInput labelText="Projected utilization"  value={inputs.projectedUtilization}     onChange={update('projectedUtilization')}     suffix="%" placeholder="80" />
-                <TextInput labelText="Current WIP realization" value={inputs.currentWipRealizationRate} onChange={update('currentWipRealizationRate')} suffix="%" placeholder="85" />
-                <TextInput labelText="Future WIP realization"  value={inputs.futureWipRealizationRate}  onChange={update('futureWipRealizationRate')}  suffix="%" placeholder="50" />
+              <div className="flex gap-2">
+                <div style={{ flex: 2, minWidth: 0 }}>
+                  <LevelSelect level={level} onLevelChange={handleLevelChange} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Projected utilization" value={inputs.projectedUtilization} onChange={update('projectedUtilization')} suffix="%" placeholder="80" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Current WIP realization" value={inputs.currentWipRealizationRate} onChange={update('currentWipRealizationRate')} suffix="%" placeholder="85" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Future WIP realization" value={inputs.futureWipRealizationRate} onChange={update('futureWipRealizationRate')} suffix="%" placeholder="50" />
+                </div>
               </div>
             </div>
 
-            {/* Group 3: Compensation (lastYearBonus moved to LastYearInputs) */}
-            <div className="shrink-0 pl-5">
+            {/* Group 3: Compensation */}
+            <div className="pl-5">
               <p className={`${sectionLabel} mb-2`}>Compensation</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '100px 85px 90px', gap: '8px', alignItems: 'start' }}>
-                <TextInput labelText="Base salary"          value={inputs.baseSalary}         onChange={update('baseSalary')}         prefix="$" suffix="K" scale={1000} placeholder="200" />
-                <TextInput labelText="Performance multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
-                <TextInput labelText="Weeks remaining"      value={inputs.weeksRemaining}      onChange={update('weeksRemaining')}     suffix=" wks" decimals={0} placeholder="28" />
+              <div className="flex gap-2">
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Base salary" value={inputs.baseSalary} onChange={update('baseSalary')} prefix="$" suffix="K" scale={1000} placeholder="200" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Performance multiple" value={inputs.performanceMultiple} onChange={update('performanceMultiple')} suffix="%" placeholder="50" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput labelText="Weeks remaining" value={inputs.weeksRemaining} onChange={update('weeksRemaining')} suffix=" wks" decimals={0} placeholder="28" />
+                </div>
               </div>
             </div>
 
           </div>
         </div>
 
-        {/* ── Breakeven (standalone full-width card) ──────────────────────── */}
-        <BreakevenCard results={results} projectedUtilization={inputs.projectedUtilization} />
-
         {/* ── Collapsibles: Reverse Calculator + Last Year Inputs ────────── */}
         <div className="grid grid-cols-2 gap-5 no-print">
-          <ReverseCalculator inputs={inputs} />
+          <ReverseCalculator inputs={inputs} open={collapsiblesOpen} onToggle={() => setCollapsiblesOpen((o) => !o)} />
           <LastYearInputs
             lastYearBaseSalary={lastYearBaseSalary}
             lastYearBonus={lastYearBonus}
@@ -1323,6 +1377,8 @@ export default function Dashboard() {
             setLastYearBaseSalary={setLastYearBaseSalary}
             setLastYearBonus={setLastYearBonus}
             setLastYearCollections={setLastYearCollections}
+            open={collapsiblesOpen}
+            onToggle={() => setCollapsiblesOpen((o) => !o)}
           />
         </div>
 
